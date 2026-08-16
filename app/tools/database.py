@@ -31,6 +31,9 @@ def save_lead(
     website: str | None,
     job_title: str | None,
     message: str,
+    source_type: str | None = None,
+    source_id: str | None = None,
+    user_id: str | None = None,
 ):
     response = (
         supabase
@@ -42,6 +45,9 @@ def save_lead(
             "website": website,
             "job_title": job_title,
             "message": message,
+            "source_type": source_type,
+            "source_id": source_id,
+            "user_id": user_id,
         })
         .execute()
     )
@@ -104,14 +110,17 @@ def save_analysis_score_research_and_email(
 
     return response.data[0]
 
-def get_lead(lead_id: int):
-
+def get_lead(
+    lead_id: int,
+    user_id: str,
+):
     response = (
         supabase
         .table("leads")
         .select("*")
         .eq("id", lead_id)
-        .single()
+        .eq("user_id", user_id)
+        .limit(1)
         .execute()
     )
 
@@ -120,18 +129,20 @@ def get_lead(lead_id: int):
             f"Lead with id {lead_id} was not found"
         )
 
-    return response.data
+    return response.data[0]
 
 def update_email_status(
     lead_id: int,
-    status: str
+    status: str,
+    user_id: str,
 ):
     allowed_statuses = {
-    "pending_approval",
-    "approved",
-    "rejected",
-    "sent"
-}
+        "pending_approval",
+        "approved",
+        "rejected",
+        "sent",
+        "failed",
+    }
 
     if status not in allowed_statuses:
         raise ValueError(
@@ -145,6 +156,7 @@ def update_email_status(
             "email_status": status
         })
         .eq("id", lead_id)
+        .eq("user_id", user_id)
         .execute()
     )
 
@@ -158,7 +170,8 @@ def update_email_status(
 def update_email_draft(
     lead_id: int,
     subject: str,
-    body: str
+    body: str,
+    user_id: str,
 ):
     response = (
         supabase
@@ -166,9 +179,10 @@ def update_email_draft(
         .update({
             "email_subject": subject,
             "email_body": body,
-            "email_status": "pending_approval"
+            "email_status": "pending_approval",
         })
         .eq("id", lead_id)
+        .eq("user_id", user_id)
         .execute()
     )
 
@@ -179,18 +193,23 @@ def update_email_draft(
 
     return response.data[0]
 
-def mark_email_as_sent(lead_id: int):
-
-    sent_at = datetime.now(timezone.utc).isoformat()
+def mark_email_as_sent(
+    lead_id: int,
+    user_id: str,
+):
+    sent_at = datetime.now(
+        timezone.utc
+    ).isoformat()
 
     response = (
         supabase
         .table("leads")
         .update({
             "email_status": "sent",
-            "sent_at": sent_at
+            "sent_at": sent_at,
         })
         .eq("id", lead_id)
+        .eq("user_id", user_id)
         .execute()
     )
 
@@ -200,3 +219,44 @@ def mark_email_as_sent(lead_id: int):
         )
 
     return response.data[0]
+
+def list_leads(
+    user_id: str,
+    status: str | None = None,
+):
+    query = (
+        supabase
+        .table("leads")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+    )
+
+    if status:
+        query = query.eq(
+            "email_status",
+            status,
+        )
+
+    response = query.execute()
+
+    return response.data
+
+def get_lead_by_source(
+    source_type: str,
+    source_id: str,
+):
+    response = (
+        supabase
+        .table("leads")
+        .select("*")
+        .eq("source_type", source_type)
+        .eq("source_id", source_id)
+        .limit(1)
+        .execute()
+    )
+
+    if response.data:
+        return response.data[0]
+
+    return None

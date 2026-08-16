@@ -1,59 +1,103 @@
-import {useEffect,useMemo,useState} from "react";
-import {Link,NavLink,Route,Routes,useNavigate,useParams} from "react-router-dom";
-import {Activity,ArrowLeft,Check,CheckCircle2,ChevronRight,Flame,Inbox,LayoutDashboard,Loader2,Mail,Menu,Plus,Search,Send,Settings,Sparkles,Users,X} from "lucide-react";
-import {approveLead,createLead,getLead,getLeads,rejectLead,sendLead,updateEmail} from "./api";
-import type {Lead,LeadInput} from "./types";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+} from "react-router-dom";
 
-const statusLabel=(s?:string|null)=>({pending_approval:"Pending Approval",approved:"Approved",rejected:"Rejected",sent:"Sent"}[s||""]||s||"Unknown");
-const scoreTone=(c?:string|null)=>(c||"").toLowerCase();
-const date=(d?:string|null)=>d?new Date(d).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):"—";
+import { AppShell } from "./components/layout/AppShell";
+import { ToastProvider } from "./components/ui/Toast";
 
-function Badge({children,tone="neutral"}:{children:any;tone?:string}){return <span className={`badge ${tone}`}>{children}</span>}
-function Score({lead}:{lead:Lead}){return <Badge tone={scoreTone(lead.category)}>{lead.score!=null?`${lead.score}/100`:"Unscored"} {lead.category?`· ${lead.category}`:""}</Badge>}
-function Status({status}:{status?:string|null}){return <Badge tone={status==="sent"||status==="approved"?"success":status==="pending_approval"?"warning":status==="rejected"?"danger":"neutral"}>{statusLabel(status)}</Badge>}
+import { Dashboard } from "./pages/Dashboard";
+import { Leads } from "./pages/Leads";
+import { AddLead } from "./pages/AddLead";
+import { LeadDetail } from "./pages/LeadDetail";
+import { Pending } from "./pages/Pending";
+import { Sent } from "./pages/Sent";
+import { Settings } from "./pages/Settings";
+import { Login } from "./pages/Login";
 
-function Shell(){
- const [open,setOpen]=useState(false);
- return <div className="shell"><aside className={open?"sidebar open":"sidebar"}><div className="brand"><div className="brandIcon"><Sparkles size={18}/></div><div><b>AI Lead Agent</b><small>Sales intelligence</small></div><button className="closeNav" onClick={()=>setOpen(false)}><X/></button></div><nav>
- {[["/dashboard","Dashboard",LayoutDashboard],["/leads","All Leads",Users],["/pending","Pending Approval",Inbox],["/sent","Sent",Send]].map(([to,label,Icon]:any)=><NavLink key={to} to={to} onClick={()=>setOpen(false)} className={({isActive})=>isActive?"nav active":"nav"}><Icon size={18}/>{label}</NavLink>)}
- </nav><div className="sideBottom"><NavLink className="nav" to="/leads/new"><Plus size={18}/>New Lead</NavLink><div className="nav muted"><Settings size={18}/>Settings</div></div></aside><main><header><button className="menu" onClick={()=>setOpen(true)}><Menu/></button><div><small>AI LEAD AGENT</small><h1>Sales workspace</h1></div><div className="avatar">SA</div></header><div className="content"><Routes><Route path="/" element={<Dashboard/>}/><Route path="/dashboard" element={<Dashboard/>}/><Route path="/leads" element={<Leads/>}/><Route path="/pending" element={<Leads mode="pending"/>}/><Route path="/sent" element={<Leads mode="sent"/>}/><Route path="/leads/new" element={<NewLead/>}/><Route path="/leads/:id" element={<Detail/>}/></Routes></div></main></div>
+const TITLES: Record<string, string> = {
+  "/dashboard": "Dashboard",
+  "/leads": "Leads",
+  "/leads/new": "Add Lead",
+  "/pending": "Pending Approval",
+  "/sent": "Sent",
+  "/settings": "Settings",
+};
+
+function pageTitle(pathname: string): string {
+  if (TITLES[pathname]) return TITLES[pathname];
+
+  if (/^\/leads\/\d+$/.test(pathname)) {
+    return "Lead Detail";
+  }
+
+  if (pathname === "/login") {
+    return "Login";
+  }
+
+  return "AI Lead Agent";
 }
 
-function Dashboard(){
- const [leads,setLeads]=useState<Lead[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState("");
- const load=()=>{setLoading(true);getLeads().then(setLeads).catch(e=>setError(e.message)).finally(()=>setLoading(false))};
- useEffect(load,[]);
- const hot=leads.filter(x=>scoreTone(x.category)==="hot").length,pending=leads.filter(x=>x.email_status==="pending_approval").length,sent=leads.filter(x=>x.email_status==="sent").length;
- return <><div className="intro"><div><small>OVERVIEW</small><h2>Good evening, Sales Admin.</h2><p>Your lead pipeline at a glance.</p></div><div className="actions"><button className="btn ghost" onClick={load}>Refresh</button><Link className="btn primary" to="/leads/new"><Plus size={16}/>Add Lead</Link></div></div>{error&&<div className="alert">{error}</div>}<div className="stats"><Stat title="Total Leads" value={leads.length} icon={<Users/>}/><Stat title="Hot Leads" value={hot} icon={<Flame/>}/><Stat title="Pending Approval" value={pending} icon={<Inbox/>}/><Stat title="Emails Sent" value={sent} icon={<CheckCircle2/>}/></div><section className="card"><div className="cardHead"><div><h3>Recent leads</h3><p>The latest activity in your pipeline.</p></div><Link to="/leads">View all</Link></div>{loading?<Loading/>:<Table leads={leads.slice().sort((a,b)=>(new Date(b.created_at||0).getTime()-new Date(a.created_at||0).getTime())).slice(0,6)}/>}</section><div className="two"><section className="card"><div className="cardHead"><div><h3>Needs attention</h3><p>AI-generated emails waiting for approval.</p></div><Inbox/></div>{pending?<div className="attention"><strong>{pending}</strong><div><b>{pending===1?"lead is":"leads are"} ready for review</b><p>Review before anything is sent.</p></div><Link className="btn primary" to="/pending">Review</Link></div>:<div className="successBox"><CheckCircle2/>You're all caught up.</div>}</section><section className="card"><div className="cardHead"><div><h3>Quick action</h3><p>Start the qualification workflow.</p></div><Activity/></div><Link className="quick" to="/leads/new"><div><Plus/></div><span><b>Add a new lead</b><small>Analyze, score, research and draft outreach.</small></span><ChevronRight/></Link></section></div></>
-}
-function Stat({title,value,icon}:{title:string,value:number,icon:any}){return <div className="stat"><div><small>{title}</small><b>{value}</b></div><span>{icon}</span></div>}
-function Loading(){return <div className="loading"><Loader2 className="spin"/>Loading...</div>}
-function Table({leads}:{leads:Lead[]}){if(!leads.length)return <div className="empty">No leads found.</div>;return <div className="tableWrap"><table><thead><tr><th>Lead</th><th>Company</th><th>Score</th><th>Status</th><th>Created</th><th/></tr></thead><tbody>{leads.map(l=><tr key={l.id}><td><Link className="person" to={`/leads/${l.id}`}><span>{l.name[0]}</span><div><b>{l.name}</b><small>{l.job_title||l.email}</small></div></Link></td><td>{l.company}</td><td><Score lead={l}/></td><td><Status status={l.email_status}/></td><td>{date(l.created_at)}</td><td><Link to={`/leads/${l.id}`}><ChevronRight size={16}/></Link></td></tr>)}</tbody></table></div>}
+function Shell() {
+  const location = useLocation();
 
-function Leads({mode}:{mode?:string}){
- const [leads,setLeads]=useState<Lead[]>([]),[q,setQ]=useState(""),[filter,setFilter]=useState(mode||"all"),[loading,setLoading]=useState(true),[error,setError]=useState("");
- useEffect(()=>{getLeads().then(setLeads).catch(e=>setError(e.message)).finally(()=>setLoading(false))},[]);
- const out=useMemo(()=>leads.filter(l=>(!q||[l.name,l.email,l.company,l.job_title].filter(Boolean).some(v=>String(v).toLowerCase().includes(q.toLowerCase())))&&(filter==="all"||["hot","warm","cold"].includes(filter)?scoreTone(l.category)===filter:l.email_status===filter)),[leads,q,filter]);
- return <><div className="intro"><div><small>{mode==="pending"?"REVIEW QUEUE":mode==="sent"?"OUTREACH HISTORY":"PIPELINE"}</small><h2>{mode==="pending"?"Pending approval":mode==="sent"?"Sent emails":"All leads"}</h2><p>{mode==="pending"?"Review AI-generated outreach before sending.":"Search, filter and review your lead pipeline."}</p></div>{mode!=="sent"&&<Link className="btn primary" to="/leads/new"><Plus size={16}/>Add Lead</Link>}</div>{error&&<div className="alert">{error}</div>}<section className="card"><div className="toolbar"><div className="search"><Search size={16}/><input placeholder="Search leads, companies or emails..." value={q} onChange={e=>setQ(e.target.value)}/></div></div><div className="tabs">{["all","hot","warm","cold","pending_approval","approved","sent"].map(x=><button key={x} className={filter===x?"tab active":"tab"} onClick={()=>setFilter(x)}>{statusLabel(x)}</button>)}</div>{loading?<Loading/>:<Table leads={out}/>}</section></>
+  return (
+    <AppShell title={pageTitle(location.pathname)}>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+
+        <Route
+          path="/"
+          element={<Navigate to="/dashboard" replace />}
+        />
+
+        <Route path="/dashboard" element={<Dashboard />} />
+
+        <Route path="/leads" element={<Leads />} />
+
+        <Route
+          path="/leads/new"
+          element={<AddLead />}
+        />
+
+        <Route
+          path="/leads/:id"
+          element={<LeadDetail />}
+        />
+
+        <Route
+          path="/pending"
+          element={<Pending />}
+        />
+
+        <Route
+          path="/sent"
+          element={<Sent />}
+        />
+
+        <Route
+          path="/settings"
+          element={<Settings />}
+        />
+
+        <Route
+          path="*"
+          element={<Navigate to="/dashboard" replace />}
+        />
+      </Routes>
+    </AppShell>
+  );
 }
 
-function NewLead(){
- const nav=useNavigate();const [f,setF]=useState<LeadInput>({name:"",email:"",company:"",website:"",job_title:"",message:""}),[busy,setBusy]=useState(false),[error,setError]=useState("");
- const set=(k:keyof LeadInput,v:string)=>setF(x=>({...x,[k]:v}));
- async function submit(e:any){e.preventDefault();if(!f.name||!f.email||!f.company||!f.message){setError("Name, email, company and message are required.");return}setBusy(true);try{const r=await createLead(f);nav(`/leads/${r.lead.id}`)}catch(e){setError(e instanceof Error?e.message:"Unable to create lead.")}finally{setBusy(false)}}
- return <div className="formPage"><Link className="back" to="/leads"><ArrowLeft size={16}/>Back to leads</Link><div className="heading"><div className="bigIcon"><Sparkles/></div><div><small>AI QUALIFICATION</small><h2>Add a new lead</h2><p>Give the agent the prospect's details. It will analyze, score, research and draft outreach.</p></div></div>{error&&<div className="alert">{error}</div>}<form className="card form" onSubmit={submit}><div className="grid2">{Field("Full name","Daniel Brooks",f.name,v=>set("name",v),true)}{Field("Email","daniel@company.com",f.email,v=>set("email",v),true,"email")}{Field("Company","Northstar Logistics",f.company,v=>set("company",v),true)}{Field("Website","https://company.com",f.website||"",v=>set("website",v))}{Field("Job title","VP of Sales",f.job_title||"",v=>set("job_title",v))}</div><label className="field"><span>Lead message *</span><textarea rows={8} value={f.message} onChange={e=>set("message",e.target.value)} placeholder="Paste the prospect's enquiry..."/></label><div className="formFoot"><small>Nothing is sent automatically. New drafts start as Pending Approval.</small><button className="btn primary" disabled={busy}>{busy?<><Loader2 className="spin"/>Analyzing...</>:<><Sparkles/>Analyze Lead</>}</button></div></form></div>
+export default function App() {
+  return (
+    <BrowserRouter>
+      <ToastProvider>
+        <Shell />
+      </ToastProvider>
+    </BrowserRouter>
+  );
 }
-function Field(label:string,placeholder:string,value:string,on:(v:string)=>void,required=false,type="text"){return <label className="field"><span>{label}{required?" *":""}</span><input type={type} placeholder={placeholder} value={value} onChange={e=>on(e.target.value)}/></label>}
-
-function Detail(){
- const {id}=useParams();const n=Number(id);const [l,setL]=useState<Lead|null>(null),[busy,setBusy]=useState(""),[error,setError]=useState(""),[edit,setEdit]=useState(false),[sub,setSub]=useState(""),[body,setBody]=useState("");
- const load=()=>getLead(n).then(x=>{setL(x);setSub(x.email_subject||"");setBody(x.email_body||"")}).catch(e=>setError(e.message));
- useEffect(()=>{load()},[n]);
- const act=async(name:string,fn:()=>Promise<any>)=>{setBusy(name);setError("");try{await fn();await load()}catch(e){setError(e instanceof Error?e.message:"Action failed.")}finally{setBusy("")}};
- if(!l)return <>{error?<div className="alert">{error}</div>:<Loading/>}</>;
- const r=l.research_data;
- return <><Link className="back" to="/leads"><ArrowLeft size={16}/>Back to leads</Link>{error&&<div className="alert">{error}</div>}<section className="hero"><div><small>{l.company}</small><h2>{l.name}</h2><p>{l.job_title||"Contact"} · {l.email}</p>{l.website&&<a href={l.website} target="_blank">Website <ExternalLink/></a>}</div><div className="heroScore"><div className="ring"><b>{l.score??"—"}</b><small>/100</small></div><div><Score lead={l}/><p>Urgency: <b>{l.urgency||"—"}</b></p></div></div></section><div className="detail"><div><section className="card"><div className="cardHead"><div><h3>Why this lead?</h3><p>Signals from the scoring engine.</p></div><Flame/></div><div className="reasons">{(l.score_reasons||[]).map((x,i)=><div key={i}><CheckCircle2/>{x}</div>)}</div></section><section className="card"><div className="cardHead"><div><h3>Lead information</h3><p>The original prospect details.</p></div><Users/></div><div className="infoGrid">{info("Email",l.email)}{info("Company",l.company)}{info("Industry",l.industry||"—")}{info("Company size",l.company_size!=null?`${l.company_size} employees`:"—")}{info("Lead volume",l.lead_volume!=null?`${l.lead_volume}/month`:"—")}{info("Problem",l.problem||"—",true)}</div><div className="message"><small>Original message</small><p>{l.message}</p></div></section><section className="card"><div className="cardHead"><div><h3>Company research</h3><p>AI research from public company information.</p></div><Activity/></div>{r?<><p className="summary">{r.summary}</p><div className="infoGrid">{info("Industry",r.industry||"—")}{info("Company size",r.company_size!=null?`${r.company_size}`:"Unknown")}{info("Target customers",r.target_customers||"Unknown",true)}</div><div className="pills">{r.products_or_services.map(x=><span key={x}>{x}</span>)}</div></>:<div className="empty">No research data.</div>}</section></div><aside><section className="card email"><div className="cardHead"><div><small>OUTREACH</small><h3>AI email draft</h3></div><Status status={l.email_status}/></div><small>SUBJECT</small><h4>{l.email_subject||"No subject"}</h4><div className="emailBody"><small>BODY</small><p>{l.email_body||"No draft"}</p></div>{l.email_status==="pending_approval"&&<div className="buttons"><button className="btn ghost" onClick={()=>setEdit(true)}><Mail/>Edit</button><button className="btn danger" disabled={!!busy} onClick={()=>act("reject",()=>rejectLead(n))}><X/>Reject</button><button className="btn primary" disabled={!!busy} onClick={()=>act("approve",()=>approveLead(n))}><Check/>Approve</button></div>}{l.email_status==="approved"&&<button className="btn primary full" disabled={!!busy} onClick={()=>act("send",()=>sendLead(n))}>{busy?<Loader2 className="spin"/>:<Send/>}Send Email</button>}{l.email_status==="sent"&&<div className="sent"><CheckCircle2/>Email sent successfully{l.sent_at?` · ${new Date(l.sent_at).toLocaleString()}`:""}</div>}{l.email_status==="rejected"&&<div className="rejected"><XCircle/>This email was rejected.</div>}</section></aside></div>{edit&&<div className="overlay"><div className="modal"><div className="modalHead"><b>Edit email draft</b><button onClick={()=>setEdit(false)}><X/></button></div><label className="field"><span>Subject</span><input value={sub} onChange={e=>setSub(e.target.value)}/></label><label className="field"><span>Body</span><textarea rows={14} value={body} onChange={e=>setBody(e.target.value)}/></label><div className="modalFoot"><button className="btn ghost" onClick={()=>setEdit(false)}>Cancel</button><button className="btn primary" disabled={busy==="edit"} onClick={()=>act("edit",async()=>{await updateEmail(n,sub,body);setEdit(false)})}><Check/>Save</button></div></div></div>}</>
-}
-function info(a:string,b:string,wide=false){return <div className={wide?"info wide":"info"}><small>{a}</small><b>{b}</b></div>}
-function ExternalLink(){return <ChevronRight size={14}/>}
-export default function App(){return <Shell/>}

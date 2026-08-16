@@ -13,7 +13,9 @@ from googleapiclient.discovery import build
 # ---------------------------------------------------------
 
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.send"
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
 ]
 
 
@@ -149,3 +151,18 @@ def send_email(
     )
 
     return sent_message
+
+def mark_message_as_read(service, message_id: str):
+    print(f"MARKING GMAIL MESSAGE AS READ: {message_id}")
+
+    result = service.users().messages().modify(
+        userId="me",
+        id=message_id,
+        body={
+            "removeLabelIds": ["UNREAD"]
+        }
+    ).execute()
+
+    print(f"GMAIL MODIFY RESULT: {result}")
+
+    return result

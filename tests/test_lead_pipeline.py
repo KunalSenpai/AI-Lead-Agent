@@ -6,11 +6,20 @@ from app.models.lead import (
     LeadAnalysis,
     LeadScore,
     CompanyResearch,
-    EmailDraft
+    EmailDraft,
 )
 
 
 def test_full_lead_pipeline():
+
+    # ---------------------------------------------------------
+    # Fake authenticated user
+    # ---------------------------------------------------------
+
+    class FakeUser:
+        id = "test-user-id"
+
+    user = FakeUser()
 
     # ---------------------------------------------------------
     # Fake incoming lead
@@ -31,7 +40,7 @@ def test_full_lead_pipeline():
 
         We want to automate lead qualification,
         scoring and routing.
-        """
+        """,
     )
 
     # ---------------------------------------------------------
@@ -43,6 +52,10 @@ def test_full_lead_pipeline():
         "name": "Vikram Rao",
         "email": "vikram@flowmatrix.example",
         "company": "FlowMatrix",
+        "website": "https://flowmatrix.example",
+        "job_title": "Director of Revenue Operations",
+        "message": lead.message,
+        "user_id": "test-user-id",
     }
 
     # ---------------------------------------------------------
@@ -57,7 +70,7 @@ def test_full_lead_pipeline():
             "Manual lead qualification and routing "
             "takes several hours every day."
         ),
-        urgency="high"
+        urgency="high",
     )
 
     # ---------------------------------------------------------
@@ -72,8 +85,8 @@ def test_full_lead_pipeline():
             "High lead volume: 350 leads/month",
             "Lead indicates high urgency",
             "Problem appears well suited to automation",
-            "Contact appears to be a decision maker"
-        ]
+            "Contact appears to be a decision maker",
+        ],
     )
 
     # ---------------------------------------------------------
@@ -89,7 +102,7 @@ def test_full_lead_pipeline():
         ),
         products_or_services=[
             "Revenue automation",
-            "Lead management"
+            "Lead management",
         ],
         target_customers="B2B companies",
         company_size=90,
@@ -99,7 +112,7 @@ def test_full_lead_pipeline():
         ),
         source_urls=[
             "https://flowmatrix.example"
-        ]
+        ],
     )
 
     # ---------------------------------------------------------
@@ -113,7 +126,7 @@ def test_full_lead_pipeline():
             "I noticed your team handles a high volume "
             "of inbound enquiries manually.\n\n"
             "We can help automate qualification and routing."
-        )
+        ),
     )
 
     # ---------------------------------------------------------
@@ -129,7 +142,7 @@ def test_full_lead_pipeline():
         "category": "Hot",
         "email_subject": email.subject,
         "email_body": email.body,
-        "email_status": "pending_approval"
+        "email_status": "pending_approval",
     }
 
     # ---------------------------------------------------------
@@ -138,74 +151,86 @@ def test_full_lead_pipeline():
 
     with patch(
         "app.api.leads.save_lead",
-        return_value=saved_lead
+        return_value=saved_lead,
     ) as mock_save_lead, patch(
         "app.api.leads.analyze_lead",
-        return_value=analysis
+        return_value=analysis,
     ) as mock_analyze, patch(
         "app.api.leads.score_lead",
-        return_value=score
+        return_value=score,
     ) as mock_score, patch(
         "app.api.leads.research_company",
-        return_value=research
+        return_value=research,
     ) as mock_research, patch(
         "app.api.leads.generate_email",
-        return_value=email
+        return_value=email,
     ) as mock_email, patch(
         "app.api.leads.save_analysis_score_research_and_email",
-        return_value=updated_lead
+        return_value=updated_lead,
     ) as mock_save_all:
 
-        result = create_lead(lead)
+        # -----------------------------------------------------
+        # Call endpoint directly with fake authenticated user
+        # -----------------------------------------------------
 
-    # ---------------------------------------------------------
-    # Verify pipeline result
-    # ---------------------------------------------------------
+        result = create_lead(
+            lead,
+            user=user,
+        )
 
-    assert result["lead"]["id"] == 999
+        # -----------------------------------------------------
+        # Verify user ownership was passed to save_lead()
+        # -----------------------------------------------------
 
-    assert result["analysis"] == (
-        analysis.model_dump()
-    )
+        mock_save_lead.assert_called_once()
 
-    assert result["score"] == (
-        score.model_dump()
-    )
+        assert (
+            mock_save_lead.call_args.kwargs["user_id"]
+            == "test-user-id"
+        )
 
-    assert result["research"] == (
-        research.model_dump()
-    )
+        # -----------------------------------------------------
+        # Verify pipeline steps were executed
+        # -----------------------------------------------------
 
-    assert result["email"] == (
-        email.model_dump()
-    )
+        mock_analyze.assert_called_once()
 
-    # ---------------------------------------------------------
-    # Verify every pipeline stage was called
-    # ---------------------------------------------------------
+        mock_score.assert_called_once()
 
-    mock_save_lead.assert_called_once()
+        mock_research.assert_called_once()
 
-    mock_analyze.assert_called_once_with(
-        lead
-    )
+        mock_email.assert_called_once()
 
-    mock_score.assert_called_once_with(
-        lead,
-        analysis
-    )
+        mock_save_all.assert_called_once()
 
-    mock_research.assert_called_once_with(
-        company_name="FlowMatrix",
-        website="https://flowmatrix.example"
-    )
+        # -----------------------------------------------------
+        # Verify final response
+        # -----------------------------------------------------
 
-    mock_email.assert_called_once_with(
-        lead=lead,
-        analysis=analysis,
-        score=score,
-        research=research
-    )
+        assert result["lead"]["id"] == 999
+        # -----------------------------------------------------
+        # Verify pipeline steps were executed
+        # -----------------------------------------------------
 
-    mock_save_all.assert_called_once()
-    
+        mock_analyze.assert_called_once()
+        mock_score.assert_called_once()
+        mock_research.assert_called_once()
+        mock_email.assert_called_once()
+        mock_save_all.assert_called_once()
+
+        # -----------------------------------------------------
+        # Verify final response
+        # -----------------------------------------------------
+
+        assert result["lead"]["id"] == 999
+
+        # create_lead() returns serialized dictionaries
+        # for the Pydantic models.
+
+        assert result["analysis"] == analysis.model_dump()
+
+        assert result["score"] == score.model_dump()
+
+        assert result["research"] == research.model_dump()
+
+        assert result["email"] == email.model_dump()
