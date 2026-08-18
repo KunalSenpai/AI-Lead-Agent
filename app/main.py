@@ -3,6 +3,7 @@ from fastapi import FastAPI
 
 from app.api.leads import router as leads_router
 from app.core.logging_config import setup_logging
+from app.api.gmail import router as gmail_router
 
 
 app = FastAPI()
@@ -27,3 +28,4 @@ def home():
 
 
 app.include_router(leads_router)
+app.include_router(gmail_router)

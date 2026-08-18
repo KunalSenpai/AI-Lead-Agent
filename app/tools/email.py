@@ -160,7 +160,12 @@ Rules:
 
 12. Include a simple call to action.
 
-13. This is ONLY a draft.
+13. The subject MUST include the exact company name:
+    {lead.company}
+
+14. Keep the subject concise and professional.
+
+15. This is ONLY a draft.
     It must NOT be sent automatically.
 
 Return only:
@@ -185,6 +190,11 @@ Return only:
     # Validate Gemini response
     # -----------------------------------------------------
 
-    return EmailDraft.model_validate_json(
-        response.text
-    )
+    result = EmailDraft.model_validate_json(
+    response.text
+)
+
+    if lead.company and lead.company.lower() not in result.subject.lower():
+        result.subject = f"{lead.company} — {result.subject}"
+
+    return result

@@ -7,15 +7,18 @@ from app.models.lead import (
     EmailEdit,
     CompanyResearch,
 )
+
 from app.core.auth import get_current_user
+
 from app.agents.lead_agent import analyze_lead
 from app.services.scoring import score_lead
-
 from app.tools.research import research_company
+
 from app.tools.email import generate_email
+from pydantic import BaseModel
 from app.tools.gmail import (
     send_email,
-    get_gmail_service,
+    get_gmail_service_for_user,
     mark_message_as_read,
 )
 
@@ -33,49 +36,65 @@ from app.tools.database import (
     mark_email_as_sent,
 )
 
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-def process_lead(lead: Lead, lead_id: int):
+class EmailApprovalRequest(BaseModel):
+    approved: bool
+
+
+# =========================================================
+# SHARED LEAD PROCESSING PIPELINE
+# =========================================================
+
+def process_lead(
+    lead: Lead,
+    lead_id: int,
+):
     """
-    Run the complete AI processing pipeline for a lead.
+    Run the complete AI processing pipeline.
 
-    This is shared by:
-    - Manual lead creation
-    - Gmail lead ingestion
+    Used by:
+    - Manual leads
+    - Gmail leads
+    - Failed lead retries
     """
-
-
-    # -----------------------------------------
-    # Step 1: Analyze lead
-    # -----------------------------------------
+    # =====================================================
+    # 1. AI ANALYSIS
+    # =====================================================
 
     try:
-        analysis = analyze_lead(lead)
+
+        analysis = analyze_lead(
+            lead
+        )
 
         logger.info(
             f"Lead {lead_id} analyzed successfully"
         )
 
     except Exception as e:
-        logger.error(
-            f"AI analysis failed for lead {lead_id}: {str(e)}"
+
+        logger.exception(
+            f"AI analysis failed for lead {lead_id}"
         )
 
         raise HTTPException(
             status_code=502,
-            detail=f"AI analysis failed: {str(e)}"
+            detail=f"AI analysis failed: {str(e)}",
         )
 
-    # -----------------------------------------
-    # Step 2: Score lead
-    # -----------------------------------------
+    # =====================================================
+    # 2. LEAD SCORING
+    # =====================================================
 
     try:
+
         score = score_lead(
             lead,
-            analysis
+            analysis,
         )
 
         logger.info(
@@ -84,40 +103,46 @@ def process_lead(lead: Lead, lead_id: int):
         )
 
     except Exception as e:
-        logger.error(
-            f"Lead scoring failed for lead {lead_id}: {str(e)}"
+
+        logger.exception(
+            f"Lead scoring failed for lead {lead_id}"
         )
 
         raise HTTPException(
             status_code=500,
-            detail=f"Lead scoring failed: {str(e)}"
+            detail=f"Lead scoring failed: {str(e)}",
         )
 
-    # -----------------------------------------
-    # Step 3: Research company
-    # -----------------------------------------
+    # =====================================================
+    # 3. COMPANY RESEARCH
+    # =====================================================
 
     if lead.website:
 
         try:
+
             research = research_company(
                 company_name=lead.company,
-                website=lead.website
+                website=lead.website,
             )
 
             logger.info(
-                f"Company research completed for lead {lead_id}"
+                f"Company research completed "
+                f"for lead {lead_id}"
             )
 
         except Exception as e:
 
-            logger.error(
-                f"Company research failed for lead {lead_id}: {str(e)}"
+            logger.exception(
+                f"Company research failed "
+                f"for lead {lead_id}"
             )
 
             raise HTTPException(
                 status_code=502,
-                detail=f"Company research failed: {str(e)}"
+                detail=(
+                    f"Company research failed: {str(e)}"
+                ),
             )
 
     else:
@@ -130,24 +155,31 @@ def process_lead(lead: Lead, lead_id: int):
         research = CompanyResearch(
             company_name=lead.company,
             industry=None,
-            description="Company website was not provided, so detailed company research is unavailable.",
+            description=(
+                "Company website was not provided, "
+                "so detailed company research is unavailable."
+            ),
             products_or_services=[],
             target_customers=None,
             company_size=None,
-            summary="Company research was skipped because no website was available.",
-            source_urls=[]
+            summary=(
+                "Company research was skipped because "
+                "no website was available."
+            ),
+            source_urls=[],
         )
 
-    # -----------------------------------------
-    # Step 4: Generate email
-    # -----------------------------------------
+    # =====================================================
+    # 4. GENERATE EMAIL
+    # =====================================================
 
     try:
+
         email = generate_email(
             lead=lead,
             analysis=analysis,
             score=score,
-            research=research
+            research=research,
         )
 
         logger.info(
@@ -155,20 +187,25 @@ def process_lead(lead: Lead, lead_id: int):
         )
 
     except Exception as e:
-        logger.error(
-            f"Email generation failed for lead {lead_id}: {str(e)}"
+
+        logger.exception(
+            f"Email generation failed "
+            f"for lead {lead_id}"
         )
 
         raise HTTPException(
             status_code=502,
-            detail=f"Email generation failed: {str(e)}"
+            detail=(
+                f"Email generation failed: {str(e)}"
+            ),
         )
 
-    # -----------------------------------------
-    # Step 5: Save results
-    # -----------------------------------------
+    # =====================================================
+    # 5. SAVE PIPELINE RESULTS
+    # =====================================================
 
     try:
+
         updated_lead = (
             save_analysis_score_research_and_email(
                 lead_id=lead_id,
@@ -180,44 +217,58 @@ def process_lead(lead: Lead, lead_id: int):
                 problem=analysis.problem,
                 urgency=analysis.urgency,
 
-                # Lead score
+                # Score
                 score=score.score,
                 category=score.category,
                 score_reasons=score.reasons,
 
-                # Company research
+                # Research
                 research_data=research.model_dump(),
 
-                # Email draft
+                # Email
                 email_subject=email.subject,
-                email_body=email.body
+                email_body=email.body,
             )
         )
 
     except Exception as e:
+
+        logger.exception(
+            f"Failed to save pipeline results "
+            f"for lead {lead_id}"
+        )
+
         raise HTTPException(
             status_code=500,
             detail=(
                 "Failed to save analysis, score, "
                 f"research and email: {str(e)}"
-            )
+            ),
         )
+
+    # =====================================================
+    # 6. RETURN PIPELINE RESULT
+    # =====================================================
 
     return {
         "lead": updated_lead,
         "analysis": analysis.model_dump(),
         "score": score.model_dump(),
         "research": research.model_dump(),
-        "email": email.model_dump()
+        "email": email.model_dump(),
     }
+
+
+# =========================================================
+# RETRY FAILED LEAD
+# =========================================================
 
 def retry_lead(
     lead_id: int,
     user_id: str,
 ):
     """
-    Re-run the AI pipeline for an existing failed lead
-    belonging to the authenticated user.
+    Retry the AI pipeline for a failed lead.
     """
 
     saved_lead = get_lead(
@@ -226,9 +277,10 @@ def retry_lead(
     )
 
     if saved_lead["email_status"] != "failed":
+
         raise HTTPException(
             status_code=400,
-            detail="Only failed leads can be retried"
+            detail="Only failed leads can be retried",
         )
 
     lead = Lead(
@@ -245,17 +297,27 @@ def retry_lead(
         lead_id=lead_id,
     )
 
+
+# =========================================================
+# CREATE MANUAL LEAD
+# =========================================================
+
 @router.post("/leads")
 def create_lead(
     lead: Lead,
     user=Depends(get_current_user),
-    ):
+):
+    """
+    Create a manual lead and run it through the
+    shared AI pipeline.
+    """
 
-    # -----------------------------------------
-    # Step 1: Save raw lead
-    # -----------------------------------------
+    # =====================================================
+    # 1. SAVE RAW LEAD
+    # =====================================================
 
     try:
+
         saved_lead = save_lead(
             name=lead.name,
             email=lead.email,
@@ -263,163 +325,100 @@ def create_lead(
             website=lead.website,
             job_title=lead.job_title,
             message=lead.message,
-            user_id=user.id,
+            user_id=str(user.id),
         )
 
     except Exception as e:
+
+        logger.exception(
+            "Failed to save manual lead"
+        )
+
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to save lead: {str(e)}"
+            detail=f"Failed to save lead: {str(e)}",
         )
 
     lead_id = saved_lead["id"]
-
-
     logger.info(
-    f"Lead {lead_id} created for company {lead.company}"
-)
-
-    # -----------------------------------------
-    # Step 2: Analyze lead with Gemini
-    # -----------------------------------------
-
-    try:
-        analysis = analyze_lead(lead)
-
-        logger.info(
-    f"Lead {lead_id} analyzed successfully"
-)
-
-    except Exception as e:
-        logger.error(
-        f"AI analysis failed for lead {lead_id}: {str(e)}"
+        f"Manual lead {lead_id} created "
+        f"for company {lead.company}"
     )
-        raise HTTPException(
-            status_code=502,
-            detail=f"AI analysis failed: {str(e)}"
-        )
 
-    # -----------------------------------------
-    # Step 3: Score lead
-    # -----------------------------------------
+    # =====================================================
+    # 2. RUN SHARED PIPELINE
+    # =====================================================
 
     try:
-        score = score_lead(
-            lead,
-            analysis
-        )
-        logger.info(
-    f"Lead {lead_id} scored {score.score} "
-    f"({score.category})"
-)
-    except Exception as e:
-        logger.error(
-        f"Lead scoring failed for lead {lead_id}: {str(e)}"
-    )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Lead scoring failed: {str(e)}"
-        )
 
-    # -----------------------------------------
-    # Step 4: Research the company
-    # -----------------------------------------
-
-    try:
-        research = research_company(
-            company_name=lead.company,
-            website=lead.website
-        )
-        logger.info(
-    f"Company research completed for lead {lead_id}"
-)
-
-    except Exception as e:
-        logger.error(
-        f"Company research failed for lead {lead_id}: {str(e)}"
-    )
-        raise HTTPException(
-            status_code=502,
-            detail=f"Company research failed: {str(e)}"
-        )
-
-    # -----------------------------------------
-    # Step 5: Generate personalized email
-    # -----------------------------------------
-
-    try:
-        email = generate_email(
+        return process_lead(
             lead=lead,
-            analysis=analysis,
-            score=score,
-            research=research
-        )
-        logger.info(
-    f"Email draft generated for lead {lead_id}"
-)
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Email generation failed: {str(e)}"
-        )
-
-    # -----------------------------------------
-    # Step 6: Save everything to Supabase
-    # -----------------------------------------
-
-    try:
-        updated_lead = save_analysis_score_research_and_email(
             lead_id=lead_id,
-
-            # AI analysis
-            industry=analysis.industry,
-            company_size=analysis.company_size,
-            lead_volume=analysis.lead_volume,
-            problem=analysis.problem,
-            urgency=analysis.urgency,
-
-            # Lead score
-            score=score.score,
-            category=score.category,
-            score_reasons=score.reasons,
-
-            # Company research
-            research_data=research.model_dump(),
-
-            # Email draft
-            email_subject=email.subject,
-            email_body=email.body
         )
 
+    except HTTPException:
+
+        try:
+
+            update_email_status(
+                lead_id=lead_id,
+                status="failed",
+                user_id=str(user.id),
+            )
+
+        except Exception:
+
+            logger.exception(
+                f"Failed to mark lead "
+                f"{lead_id} as failed"
+            )
+
+        raise
+
     except Exception as e:
+
+        logger.exception(
+            f"Lead processing failed "
+            f"for manual lead {lead_id}"
+        )
+
+        try:
+
+            update_email_status(
+                lead_id=lead_id,
+                status="failed",
+                user_id=str(user.id),
+            )
+
+        except Exception:
+
+            logger.exception(
+                f"Failed to mark lead "
+                f"{lead_id} as failed"
+            )
+
         raise HTTPException(
             status_code=500,
             detail=(
-                "Failed to save analysis, score, "
-                f"research and email: {str(e)}"
-            )
+                f"Lead processing failed: {str(e)}"
+            ),
         )
 
-    # -----------------------------------------
-    # Step 7: Return everything
-    # -----------------------------------------
 
-    return {
-        "lead": updated_lead,
-        "analysis": analysis.model_dump(),
-        "score": score.model_dump(),
-        "research": research.model_dump(),
-        "email": email.model_dump()
-    }
+# =========================================================
+# GET ALL LEADS
+# =========================================================
 
 @router.get("/leads")
 def get_all_leads(
     status: str | None = None,
     user=Depends(get_current_user),
 ):
+
     try:
+
         leads = list_leads(
-            user_id=user.id,
+            user_id=str(user.id),
             status=status,
         )
 
@@ -428,6 +427,7 @@ def get_all_leads(
         }
 
     except Exception as e:
+
         logger.exception(
             "Failed to fetch leads"
         )
@@ -438,153 +438,201 @@ def get_all_leads(
         )
 
 
+# =========================================================
+# GET SINGLE LEAD
+# =========================================================
+
 @router.get("/leads/{lead_id}")
 def get_lead_by_id(
     lead_id: int,
     user=Depends(get_current_user),
 ):
+
     try:
+
         lead = get_lead(
             lead_id=lead_id,
-            user_id=user.id,
+            user_id=str(user.id),
         )
 
-    except Exception as e:
+    except Exception:
+
         raise HTTPException(
             status_code=404,
-            detail=f"Lead not found: {str(e)}"
+            detail="Lead not found",
         )
 
     return {
         "lead": lead
     }
 
+
+# =========================================================
+# APPROVE / REJECT EMAIL
+# =========================================================
+
 @router.post("/leads/{lead_id}/approve")
-def approve_email(
+def approve_or_reject_email(
     lead_id: int,
+    payload: EmailApprovalRequest,
     user=Depends(get_current_user),
 ):
+    """
+    Approve or reject an email draft.
+
+    Expected body:
+
+        {
+            "approved": true
+        }
+
+    or:
+
+        {
+            "approved": false
+        }
+    """
+
+    # =====================================================
+    # 1. GET LEAD
+    # =====================================================
+
     try:
+
         lead = get_lead(
             lead_id=lead_id,
-            user_id=user.id,
+            user_id=str(user.id),
         )
 
     except Exception:
+
         raise HTTPException(
             status_code=404,
             detail="Lead not found",
         )
 
+    # =====================================================
+    # 2. CHECK CURRENT STATUS
+    # =====================================================
+
     if lead["email_status"] != "pending_approval":
+
         raise HTTPException(
             status_code=400,
             detail=(
-                "Email cannot be approved because "
-                f"its current status is "
-                f"'{lead['email_status']}'"
+                "Email cannot be approved or rejected "
+                "because its current status is "
+                f"'{lead['email_status']}'."
             ),
         )
 
+    # =====================================================
+    # 3. READ APPROVAL VALUE
+    # =====================================================
+
+    approved = payload.approved
+
+    # =====================================================
+    # 4. DETERMINE STATUS
+    # =====================================================
+
+    status = (
+        "approved"
+        if approved
+        else "rejected"
+    )
+
+    # =====================================================
+    # 5. SAVE STATUS
+    # =====================================================
+
     try:
+
         updated_lead = update_email_status(
             lead_id=lead_id,
-            status="approved",
-            user_id=user.id,
-        )
-
-        logger.info(
-            f"Email approved for lead {lead_id}"
+            status=status,
+            user_id=str(user.id),
         )
 
     except Exception as e:
+
+        logger.exception(
+            f"Failed to update email status "
+            f"for lead {lead_id}"
+        )
+
+
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to approve email: {str(e)}",
-        )
-
-    return {
-        "message": "Email approved successfully",
-        "lead": updated_lead,
-    }
-
-@router.post("/leads/{lead_id}/reject")
-def reject_email(
-    lead_id: int,
-    user=Depends(get_current_user),
-):
-    try:
-        lead = get_lead(
-            lead_id=lead_id,
-            user_id=user.id,
-        )
-
-    except Exception:
-        raise HTTPException(
-            status_code=404,
-            detail="Lead not found",
-        )
-
-    if lead["email_status"] != "pending_approval":
-        raise HTTPException(
-            status_code=400,
             detail=(
-                "Email cannot be rejected because "
-                f"its current status is "
-                f"'{lead['email_status']}'"
+                f"Failed to update email status: "
+                f"{str(e)}"
             ),
         )
 
-    try:
-        updated_lead = update_email_status(
-            lead_id=lead_id,
-            status="rejected",
-            user_id=user.id,
-        )
+    # =====================================================
+    # 6. LOG
+    # =====================================================
 
-        logger.info(
-            f"Email rejected for lead {lead_id}"
-        )
+    logger.info(
+        f"Lead {lead_id} email status changed "
+        f"to {status}"
+    )
 
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to reject email: {str(e)}",
-        )
+    # =====================================================
+    # 7. RESPONSE
+    # =====================================================
 
     return {
-        "message": "Email rejected successfully",
+        "message": (
+            "Email approved successfully"
+            if approved
+            else "Email rejected successfully"
+        ),
         "lead": updated_lead,
     }
 
-@router.put("/leads/{lead_id}/email")
+
+# =========================================================
+# EDIT EMAIL
+# =========================================================
+
+@router.patch("/leads/{lead_id}/email")
 def edit_email(
     lead_id: int,
     email: EmailEdit,
     user=Depends(get_current_user),
 ):
-    # -----------------------------------------
-    # Step 1: Find the user's lead
-    # -----------------------------------------
+    """
+    Update an email draft.
+
+    Editing an email returns it to pending_approval.
+    """
+
+    # -----------------------------------------------------
+    # Get lead belonging to authenticated user
+    # -----------------------------------------------------
 
     try:
+
         lead = get_lead(
             lead_id=lead_id,
-            user_id=user.id,
+            user_id=str(user.id),
         )
 
     except Exception:
+
         raise HTTPException(
             status_code=404,
             detail="Lead not found",
         )
 
-    # -----------------------------------------
-    # Step 2: Only allow editing when
-    #         email is pending approval
-    # -----------------------------------------
+    # -----------------------------------------------------
+    # Only pending emails can be edited
+    # -----------------------------------------------------
 
     if lead["email_status"] != "pending_approval":
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -594,59 +642,77 @@ def edit_email(
             ),
         )
 
-    # -----------------------------------------
-    # Step 3: Save edited email
-    # -----------------------------------------
+    # -----------------------------------------------------
+    # Update email
+    # -----------------------------------------------------
 
     try:
+
         updated_lead = update_email_draft(
             lead_id=lead_id,
             subject=email.subject,
             body=email.body,
-            user_id=user.id,
+            user_id=str(user.id),
         )
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update email: {str(e)}",
+
+        logger.exception(
+            f"Failed to update email "
+            f"for lead {lead_id}"
         )
 
-    # -----------------------------------------
-    # Step 4: Return updated lead
-    # -----------------------------------------
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Failed to update email: {str(e)}"
+            ),
+        )
 
-    return {
-        "message": "Email draft updated successfully",
-        "lead": updated_lead,
-    }
+    # -----------------------------------------------------
+    # Return updated lead
+    # -----------------------------------------------------
+
+    return updated_lead
+
+# =========================================================
+# SEND EMAIL
+# =========================================================
 
 @router.post("/leads/{lead_id}/send")
 def send_lead_email(
     lead_id: int,
     user=Depends(get_current_user),
 ):
-    # -----------------------------------------
-    # Step 1: Get the user's lead
-    # -----------------------------------------
+    """
+    Send an approved email using the authenticated
+    user's connected Gmail account.
+    """
+
+    # =====================================================
+    # 1. GET USER'S LEAD
+    # =====================================================
 
     try:
+
         lead = get_lead(
             lead_id=lead_id,
-            user_id=user.id,
+            user_id=str(user.id),
         )
 
     except Exception:
+
         raise HTTPException(
             status_code=404,
             detail="Lead not found",
         )
 
-    # -----------------------------------------
-    # Step 2: SAFETY CHECK
-    # -----------------------------------------
+    # =====================================================
+    # 2. PREVENT DUPLICATE SEND
+    # =====================================================
 
     if lead["email_status"] == "sent":
+
         logger.warning(
             f"Duplicate email send attempted "
             f"for lead {lead_id}"
@@ -656,8 +722,32 @@ def send_lead_email(
             status_code=400,
             detail="Email has already been sent.",
         )
+    # -----------------------------------------------------
+# Prevent duplicate sending when an outbound Gmail
+# message ID already exists.
+# -----------------------------------------------------
+
+    if lead.get("gmail_message_id"):
+
+        logger.warning(
+            f"Lead {lead_id} already has Gmail message ID "
+            f"{lead['gmail_message_id']}. "
+            f"Preventing duplicate send."
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "An email has already been sent for this lead."
+            ),
+        )
+
+    # =====================================================
+    # 3. REQUIRE APPROVAL
+    # =====================================================
 
     if lead["email_status"] != "approved":
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -668,41 +758,63 @@ def send_lead_email(
             ),
         )
 
-    # -----------------------------------------
-    # Step 3: Check email exists
-    # -----------------------------------------
+    # =====================================================
+    # 4. VALIDATE EMAIL CONTENT
+    # =====================================================
 
-    if not lead.get("email_subject"):
+    if not lead.get(
+        "email_subject"
+    ):
+
         raise HTTPException(
             status_code=400,
             detail="Email subject is missing.",
         )
 
-    if not lead.get("email_body"):
+    if not lead.get(
+        "email_body"
+    ):
+
         raise HTTPException(
             status_code=400,
             detail="Email body is missing.",
         )
 
-    # -----------------------------------------
-    # Step 4: Send through Gmail
-    # -----------------------------------------
-
-    logger.info(
-        f"Sending email for lead {lead_id}"
-    )
+    # =====================================================
+    # 5. SEND THROUGH GMAIL TOOL
+    #
+    # IMPORTANT:
+    #
+    # We intentionally call send_email() here.
+    #
+    # The function receives user_id and internally uses
+    # get_gmail_service_for_user().
+    #
+    # This keeps:
+    #
+    # API endpoint
+    #      ↓
+    # send_email()
+    #      ↓
+    # user's Gmail connection
+    #
+    # It also preserves our test mocking.
+    # =====================================================
 
     try:
+
         gmail_result = send_email(
             recipient=lead["email"],
             subject=lead["email_subject"],
             body=lead["email_body"],
+            user_id=str(user.id),
         )
 
     except Exception as e:
-        logger.error(
-            f"Failed to send email for lead "
-            f"{lead_id}: {str(e)}"
+
+        logger.exception(
+            f"Failed to send email "
+            f"for lead {lead_id}"
         )
 
         raise HTTPException(
@@ -710,21 +822,47 @@ def send_lead_email(
             detail=f"Failed to send email: {str(e)}",
         )
 
-    # -----------------------------------------
-    # Step 5: Mark as sent
-    # -----------------------------------------
+        # =====================================================
+    # 6. GET GMAIL MESSAGE ID
+    # =====================================================
 
-    try:
-        updated_lead = mark_email_as_sent(
-            lead_id=lead_id,
-            user_id=user.id,
+    gmail_message_id = gmail_result.get("id")
+
+    if not gmail_message_id:
+
+        logger.error(
+            f"Gmail send returned no message ID "
+            f"for lead {lead_id}"
         )
 
-        logger.info(
-            f"Email sent successfully for lead {lead_id}"
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Gmail accepted the request, but no "
+                "message ID was returned."
+            ),
+        )
+
+    # =====================================================
+    # 7. MARK AS SENT
+    # =====================================================
+
+    try:
+
+        updated_lead = mark_email_as_sent(
+            lead_id=lead_id,
+            user_id=str(user.id),
+            gmail_message_id=gmail_message_id,
         )
 
     except Exception as e:
+
+        logger.exception(
+            f"Email was sent but database update "
+            f"failed for lead {lead_id}. "
+            f"Gmail message ID: {gmail_message_id}"
+        )
+
         raise HTTPException(
             status_code=500,
             detail=(
@@ -734,33 +872,63 @@ def send_lead_email(
             ),
         )
 
-    # -----------------------------------------
-    # Step 6: Return result
-    # -----------------------------------------
+    logger.info(
+        f"Email sent successfully "
+        f"for lead {lead_id}. "
+        f"Gmail message ID: {gmail_message_id}"
+    )
 
     return {
         "message": "Email sent successfully",
-        "gmail_message_id": gmail_result["id"],
+        "gmail_message_id": gmail_message_id,
         "lead": updated_lead,
     }
 
+# =========================================================
+# GMAIL SYNC
+# =========================================================
+
 @router.post("/gmail/sync")
-def sync_gmail(user=Depends(get_current_user)):
-    
+def sync_gmail(
+    user=Depends(get_current_user),
+):
+    """
+    Sync unread Gmail messages for the authenticated
+    user, create potential leads, and run them through
+    the AI pipeline.
+    """
 
     try:
 
-        gmail_service = get_gmail_service()
+        # =================================================
+        # 1. GET USER'S GMAIL SERVICE
+        # =================================================
 
-        ingestion_result = fetch_and_create_gmail_leads(
-            service=gmail_service,
-            user_id=user.id,
+        gmail_service = get_gmail_service_for_user(
+            user_id=str(user.id),
+        )
+
+        # =================================================
+        # 2. INGEST GMAIL
+        # =================================================
+
+        ingestion_result = (
+            fetch_and_create_gmail_leads(
+                service=gmail_service,
+                user_id=str(user.id),
+            )
         )
 
         processed_leads = []
         failed_leads = []
 
-        for saved_lead in ingestion_result["created_leads"]:
+        # =================================================
+        # 3. PROCESS NEW LEADS
+        # =================================================
+
+        for saved_lead in ingestion_result[
+            "created_leads"
+        ]:
 
             lead = Lead(
                 name=saved_lead["name"],
@@ -775,20 +943,33 @@ def sync_gmail(user=Depends(get_current_user)):
 
                 result = process_lead(
                     lead=lead,
-                    lead_id=saved_lead["id"]
+                    lead_id=saved_lead["id"],
                 )
+
+                # =========================================
+                # Mark Gmail message as READ only after
+                # successful AI processing.
+                # =========================================
 
                 try:
 
                     mark_message_as_read(
                         service=gmail_service,
-                        message_id=saved_lead["source_id"]
+                        message_id=saved_lead[
+                            "source_id"
+                        ],
+                    )
+
+                    logger.info(
+                        "Gmail message marked as read "
+                        f"after successful processing: "
+                        f"{saved_lead['source_id']}"
                     )
 
                 except Exception:
 
                     logger.exception(
-                        f"Failed to mark Gmail message "
+                        "Failed to mark Gmail message "
                         f"{saved_lead['source_id']} as read"
                     )
 
@@ -799,22 +980,29 @@ def sync_gmail(user=Depends(get_current_user)):
             except Exception as e:
 
                 logger.exception(
-                    f"Gmail lead processing failed "
+                    "Gmail lead processing failed "
                     f"for lead {saved_lead['id']}"
                 )
 
+                # =========================================
+                # Mark lead failed.
+                #
+                # The Gmail message remains unread,
+                # allowing a future sync to retry it.
+                # =========================================
+
                 try:
 
-                   update_email_status(
+                    update_email_status(
                         lead_id=saved_lead["id"],
                         status="failed",
-                        user_id=user.id,
+                        user_id=str(user.id),
                     )
 
                 except Exception:
 
                     logger.exception(
-                        f"Failed to mark lead "
+                        "Failed to mark Gmail lead "
                         f"{saved_lead['id']} as failed"
                     )
 
@@ -823,23 +1011,45 @@ def sync_gmail(user=Depends(get_current_user)):
                     "error": str(e),
                 })
 
+        # =================================================
+        # 4. RETURN SYNC RESULT
+        # =================================================
+
         return {
             "success": True,
-            "messages_checked": ingestion_result[
-                "messages_checked"
-            ],
-            "leads_created": ingestion_result[
-                "leads_created"
-            ],
-            "duplicates_skipped": ingestion_result[
-                "duplicates_skipped"
-            ],
-            "non_leads_skipped": ingestion_result[
-                "non_leads_skipped"
-            ],
+
+            "messages_checked": (
+                ingestion_result[
+                    "messages_checked"
+                ]
+            ),
+
+            "leads_created": (
+                ingestion_result[
+                    "leads_created"
+                ]
+            ),
+
+            "duplicates_skipped": (
+                ingestion_result[
+                    "duplicates_skipped"
+                ]
+            ),
+
+            "non_leads_skipped": (
+                ingestion_result[
+                    "non_leads_skipped"
+                ]
+            ),
+
             "processed_leads": processed_leads,
+
             "failed_leads": failed_leads,
         }
+
+    except HTTPException:
+
+        raise
 
     except Exception as e:
 
@@ -849,21 +1059,29 @@ def sync_gmail(user=Depends(get_current_user)):
 
         raise HTTPException(
             status_code=500,
-            detail="Gmail sync failed"
+            detail=f"Gmail sync failed: {str(e)}",
         )
+
+
+# =========================================================
+# RETRY FAILED LEAD
+# =========================================================
 
 @router.post("/leads/{lead_id}/retry")
 def retry_failed_lead(
     lead_id: int,
     user=Depends(get_current_user),
 ):
+
     try:
+
         return retry_lead(
             lead_id=lead_id,
-            user_id=user.id,
+            user_id=str(user.id),
         )
 
     except HTTPException:
+
         raise
 
     except Exception as e:
@@ -872,29 +1090,12 @@ def retry_failed_lead(
             f"Failed to retry lead {lead_id}"
         )
 
-        # -------------------------------------------------
-        # Lead was not found for this authenticated user.
-        # Do not expose database details.
-        # -------------------------------------------------
-
-        if "was not found" in str(e).lower():
-
-            raise HTTPException(
-                status_code=404,
-                detail="Lead not found",
-            )
-
-        # -------------------------------------------------
-        # Preserve failed status only when we actually
-        # have access to the lead.
-        # -------------------------------------------------
-
         try:
 
             update_email_status(
                 lead_id=lead_id,
                 status="failed",
-                user_id=user.id,
+                user_id=str(user.id),
             )
 
         except Exception:
@@ -908,11 +1109,17 @@ def retry_failed_lead(
             status_code=500,
             detail=f"Lead retry failed: {str(e)}",
         )
-    
+
+
+# =========================================================
+# AUTHENTICATED USER
+# =========================================================
+
 @router.get("/auth/me")
 def get_authenticated_user(
     user=Depends(get_current_user),
 ):
+
     return {
         "id": user.id,
         "email": user.email,

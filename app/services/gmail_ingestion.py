@@ -2,6 +2,7 @@ import logging
 
 from app.tools.gmail import (
     get_gmail_service,
+    get_gmail_service_for_user,
     mark_message_as_read,
 )
 from app.tools.gmail_parser import parse_gmail_message
@@ -24,23 +25,29 @@ def fetch_and_create_gmail_leads(
     """
     Fetch unread Gmail messages, identify potential leads,
     extract lead information, and create new Supabase leads.
-
-    The created lead is associated with the authenticated
-    application user through user_id.
-
-    Does NOT run the downstream AI lead pipeline yet.
     """
 
     # ---------------------------------------------------------
-    # Get Gmail service
+    # Gmail service
     # ---------------------------------------------------------
 
     if service is None:
-        service = get_gmail_service()
+
+        if user_id:
+            service = get_gmail_service_for_user(
+                user_id=user_id
+            )
+        else:
+            service = get_gmail_service()
 
     # ---------------------------------------------------------
     # Fetch unread Gmail messages
     # ---------------------------------------------------------
+    logger.info(
+        "GMAIL SYNC QUERY | "
+        f"user_id={user_id} | "
+        f"max_results={max_results}"
+    )
 
     response = (
         service
@@ -55,6 +62,11 @@ def fetch_and_create_gmail_leads(
     )
 
     messages = response.get("messages", [])
+    logger.info(
+    "GMAIL SYNC RESULT | "
+    f"messages_returned={len(messages)} | "
+    f"message_ids={[m.get('id') for m in messages]}"
+)
 
     # ---------------------------------------------------------
     # Results
@@ -93,6 +105,10 @@ def fetch_and_create_gmail_leads(
             )
             .execute()
         )
+        logger.info(
+    "GMAIL MESSAGE FETCHED | "
+    f"message_id={message_id}"
+)
 
         # -----------------------------------------------------
         # Parse Gmail message
@@ -101,12 +117,28 @@ def fetch_and_create_gmail_leads(
         parsed = parse_gmail_message(
             full_message
         )
-
+        logger.info(
+    "GMAIL MESSAGE PARSED | "
+    f"message_id={message_id} | "
+    f"sender={parsed.get('email')} | "
+    f"subject={parsed.get('subject')} | "
+    f"body={parsed.get('body', '')[:500]}"
+)
         # -----------------------------------------------------
         # Ignore non-leads
         # -----------------------------------------------------
 
-        if not is_potential_lead(parsed):
+        potential_lead = is_potential_lead(
+            parsed
+        )
+
+        logger.info(
+            "GMAIL LEAD DETECTOR | "
+            f"message_id={message_id} | "
+            f"result={potential_lead}"
+        )
+
+        if not potential_lead:
 
             results["non_leads_skipped"] += 1
 
@@ -119,6 +151,7 @@ def fetch_and_create_gmail_leads(
         existing_lead = get_lead_by_source(
             source_type="gmail",
             source_id=message_id,
+            user_id=user_id,
         )
 
         if existing_lead:

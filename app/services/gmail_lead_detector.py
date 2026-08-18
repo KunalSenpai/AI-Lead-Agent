@@ -12,6 +12,10 @@ GMAIL_USER_EMAIL = (
 ).lower().strip()
 
 
+# ---------------------------------------------------------
+# Sender/domain exclusions
+# ---------------------------------------------------------
+
 IGNORED_SENDER_DOMAINS = {
     "googlemail.com",
     "google.com",
@@ -41,24 +45,67 @@ AUTOMATED_SENDER_PREFIXES = {
 }
 
 
-LEAD_KEYWORDS = {
-    "interested",
-    "pricing",
-    "price",
-    "demo",
-    "quote",
-    "quotation",
-    "proposal",
-    "consultation",
-    "consult",
-    "sales",
-    "services",
-    "solution",
-    "enquiry",
-    "inquiry",
-    "qualification",
+# ---------------------------------------------------------
+# Strong non-lead / transactional signals
+# ---------------------------------------------------------
+
+NON_LEAD_KEYWORDS = {
+    # Account verification
+    "verify your email",
+    "verify your account",
+    "email verification",
+    "account verification",
+    "confirm your email",
+    "confirm your account",
+    "verification code",
+    "verification link",
+    "verify email address",
+
+    # Authentication / security
+    "one-time password",
+    "one time password",
+    "otp",
+    "security code",
+    "security alert",
+    "password reset",
+    "reset your password",
+    "sign-in attempt",
+    "login attempt",
+    "login verification",
+    "authentication code",
+    "authentication",
+
+    # Generic account notifications
+    "account activated",
+    "account created",
+    "welcome to",
+    "confirm subscription",
+    "subscription confirmed",
+
+    # Transactional
+    "order confirmation",
+    "order confirmed",
+    "payment confirmation",
+    "payment received",
+    "invoice",
+    "receipt",
+    "transaction",
+    "shipping confirmation",
+    "delivery confirmation",
+    "your package",
+    "your order",
+
+    # Generic automated notifications
+    "automated message",
+    "automated notification",
+    "do not reply",
+    "this is an automated",
 }
 
+
+# ---------------------------------------------------------
+# Marketing signals
+# ---------------------------------------------------------
 
 MARKETING_KEYWORDS = {
     "unsubscribe",
@@ -81,7 +128,131 @@ MARKETING_KEYWORDS = {
 }
 
 
-def is_potential_lead(email_data: dict) -> bool:
+# ---------------------------------------------------------
+# Strong lead intent phrases
+# ---------------------------------------------------------
+
+STRONG_LEAD_PHRASES = {
+    "i am interested",
+    "i'm interested",
+    "we are interested",
+    "we're interested",
+    "interested in your",
+    "interested in your services",
+    "interested in your service",
+    "interested in your product",
+    "interested in working with",
+    "would like a demo",
+    "would like to schedule",
+    "would like to discuss",
+    "request a demo",
+    "request pricing",
+    "request a quote",
+    "request a proposal",
+    "looking for a solution",
+    "looking for your services",
+    "looking for help",
+    "need help with",
+    "need a solution",
+    "we need",
+    "we are looking for",
+    "we're looking for",
+    "can you help us",
+    "could you help us",
+    "please contact me",
+    "please get in touch",
+    "schedule a call",
+    "book a call",
+    "set up a call",
+    "want to discuss",
+    "would like to learn more",
+}
+
+
+# ---------------------------------------------------------
+# Existing lead keywords
+# ---------------------------------------------------------
+
+LEAD_KEYWORDS = {
+    "interested",
+    "pricing",
+    "price",
+    "demo",
+    "quote",
+    "quotation",
+    "proposal",
+    "consultation",
+    "consult",
+    "sales",
+    "services",
+    "solution",
+    "enquiry",
+    "inquiry",
+    "qualification",
+}
+
+
+# ---------------------------------------------------------
+# Business-context keywords
+# ---------------------------------------------------------
+
+BUSINESS_CONTEXT_KEYWORDS = {
+    "company",
+    "business",
+    "team",
+    "employees",
+    "customers",
+    "clients",
+    "sales team",
+    "sales process",
+    "leads",
+    "lead generation",
+    "workflow",
+    "automation",
+    "integration",
+    "implementation",
+    "requirements",
+    "project",
+    "budget",
+    "monthly",
+    "annually",
+}
+
+
+def _contains_phrase(
+    content: str,
+    phrases: set[str],
+) -> bool:
+
+    for phrase in phrases:
+
+        if phrase in content:
+            return True
+
+    return False
+
+
+def _count_keyword_matches(
+    content: str,
+    keywords: set[str],
+) -> int:
+
+    matches = 0
+
+    for keyword in keywords:
+
+        if re.search(
+            rf"\b{re.escape(keyword)}\b",
+            content,
+        ):
+            matches += 1
+
+    return matches
+
+
+def is_potential_lead(
+    email_data: dict,
+) -> bool:
 
     sender_email = (
         email_data.get("email") or ""
@@ -89,11 +260,11 @@ def is_potential_lead(email_data: dict) -> bool:
 
     subject = (
         email_data.get("subject") or ""
-    ).lower()
+    ).lower().strip()
 
     body = (
         email_data.get("body") or ""
-    ).lower()
+    ).lower().strip()
 
     if not sender_email:
         return False
@@ -119,7 +290,10 @@ def is_potential_lead(email_data: dict) -> bool:
 
     if "@" in sender_email:
 
-        domain = sender_email.split("@", 1)[1]
+        domain = sender_email.split(
+            "@",
+            1,
+        )[1]
 
         if domain in IGNORED_SENDER_DOMAINS:
             return False
@@ -136,35 +310,100 @@ def is_potential_lead(email_data: dict) -> bool:
     # -----------------------------------------------------
 
     content = f"{subject}\n{body}"
+    print("===== GMAIL DETECTOR DEBUG =====")
+    print("SUBJECT:", subject)
+    print("BODY:", body)
+    print(
+        "STRONG PHRASE MATCHES:",
+        [
+            phrase
+            for phrase in STRONG_LEAD_PHRASES
+            if phrase in content
+        ],
+    )
+    print(
+        "NON-LEAD MATCHES:",
+        [
+            phrase
+            for phrase in NON_LEAD_KEYWORDS
+            if phrase in content
+        ],
+    )
+    print("================================")
 
     # -----------------------------------------------------
-    # Strong marketing signals
+    # Strong non-lead signals
+    #
+    # These should take priority over weak positive
+    # keywords.
     # -----------------------------------------------------
 
-    marketing_matches = 0
+    if _contains_phrase(
+        content,
+        NON_LEAD_KEYWORDS,
+    ):
+        return False
 
-    for keyword in MARKETING_KEYWORDS:
+    # -----------------------------------------------------
+    # Marketing signals
+    # -----------------------------------------------------
 
-        if keyword in content:
-            marketing_matches += 1
+    marketing_matches = _count_keyword_matches(
+        content,
+        MARKETING_KEYWORDS,
+    )
 
-    # Multiple marketing signals strongly suggest
-    # this is a newsletter or promotional email.
     if marketing_matches >= 1:
         return False
 
     # -----------------------------------------------------
-    # Lead signals
+    # Strong direct lead intent
+    #
+    # A direct commercial request is enough to qualify.
     # -----------------------------------------------------
 
-    lead_matches = 0
+    if _contains_phrase(
+        content,
+        STRONG_LEAD_PHRASES,
+    ):
+        return True
 
-    for keyword in LEAD_KEYWORDS:
+    # -----------------------------------------------------
+    # Weak lead signals
+    #
+    # A single generic word such as "services" should NOT
+    # automatically turn an email into a lead.
+    # -----------------------------------------------------
 
-        if re.search(
-            rf"\b{re.escape(keyword)}\b",
-            content,
-        ):
-            lead_matches += 1
+    lead_matches = _count_keyword_matches(
+        content,
+        LEAD_KEYWORDS,
+    )
 
-    return lead_matches >= 1
+    business_matches = _count_keyword_matches(
+        content,
+        BUSINESS_CONTEXT_KEYWORDS,
+    )
+
+    # -----------------------------------------------------
+    # Require stronger evidence when using generic
+    # keywords.
+    #
+    # Examples:
+    #
+    # "pricing" + "company"      -> lead
+    # "demo" + "business"       -> lead
+    # "services" alone           -> not enough
+    # "solution" alone           -> not enough
+    # -----------------------------------------------------
+
+    if lead_matches >= 2:
+        return True
+
+    if (
+        lead_matches >= 1
+        and business_matches >= 1
+    ):
+        return True
+
+    return False
