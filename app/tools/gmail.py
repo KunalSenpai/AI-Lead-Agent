@@ -8,12 +8,15 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from google.auth.exceptions import RefreshError
 
 from app.tools.database import (
     get_gmail_connection,
     update_gmail_connection_tokens,
 )
+import logging
 
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------
 # Gmail permissions
@@ -287,9 +290,24 @@ def get_gmail_service_for_user(
         and credentials.refresh_token
     ):
 
-        credentials.refresh(
-            Request()
-        )
+        try:
+
+            credentials.refresh(
+                Request()
+            )
+
+        except RefreshError as e:
+
+            logger.exception(
+                f"Failed to refresh Gmail credentials "
+                f"for user {user_id}"
+            )
+
+            raise RuntimeError(
+                "Gmail authorization has expired or "
+                "has been revoked. Please reconnect "
+                "your Gmail account."
+            ) from e
 
         # -------------------------------------------------
         # Save refreshed credentials
@@ -313,7 +331,6 @@ def get_gmail_service_for_user(
             ),
             token_expiry=new_expiry,
         )
-
     # -----------------------------------------------------
     # Build Gmail API service
     # -----------------------------------------------------
