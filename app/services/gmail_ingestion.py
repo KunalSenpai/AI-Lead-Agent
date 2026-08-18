@@ -25,6 +25,12 @@ def fetch_and_create_gmail_leads(
     """
     Fetch unread Gmail messages, identify potential leads,
     extract lead information, and create new Supabase leads.
+
+    Gmail pagination is handled automatically until there are
+    no more pages.
+
+    A failure processing one message does not stop the rest
+    of the sync.
     """
 
     # ---------------------------------------------------------
@@ -34,39 +40,14 @@ def fetch_and_create_gmail_leads(
     if service is None:
 
         if user_id:
+
             service = get_gmail_service_for_user(
                 user_id=user_id
             )
+
         else:
+
             service = get_gmail_service()
-
-    # ---------------------------------------------------------
-    # Fetch unread Gmail messages
-    # ---------------------------------------------------------
-    logger.info(
-        "GMAIL SYNC QUERY | "
-        f"user_id={user_id} | "
-        f"max_results={max_results}"
-    )
-
-    response = (
-        service
-        .users()
-        .messages()
-        .list(
-            userId="me",
-            q="is:unread",
-            maxResults=max_results,
-        )
-        .execute()
-    )
-
-    messages = response.get("messages", [])
-    logger.info(
-    "GMAIL SYNC RESULT | "
-    f"messages_returned={len(messages)} | "
-    f"message_ids={[m.get('id') for m in messages]}"
-)
 
     # ---------------------------------------------------------
     # Results
@@ -78,176 +59,293 @@ def fetch_and_create_gmail_leads(
         "duplicates_skipped": 0,
         "non_leads_skipped": 0,
         "created_leads": [],
+        "failed_messages": [],
     }
 
     # ---------------------------------------------------------
-    # Process messages
+    # Gmail pagination
     # ---------------------------------------------------------
 
-    for message in messages:
+    page_token = None
 
-        results["messages_checked"] += 1
+    while True:
 
-        message_id = message["id"]
+        logger.info(
+            "GMAIL SYNC QUERY | "
+            f"user_id={user_id} | "
+            f"max_results={max_results} | "
+            f"page_token={page_token}"
+        )
 
-        # -----------------------------------------------------
-        # Get full Gmail message
-        # -----------------------------------------------------
+        list_kwargs = {
+            "userId": "me",
+            "q": "is:unread",
+            "maxResults": max_results,
+        }
 
-        full_message = (
+        if page_token:
+            list_kwargs["pageToken"] = page_token
+
+        response = (
             service
             .users()
             .messages()
-            .get(
-                userId="me",
-                id=message_id,
-                format="full",
-            )
+            .list(**list_kwargs)
             .execute()
         )
-        logger.info(
-    "GMAIL MESSAGE FETCHED | "
-    f"message_id={message_id}"
-)
 
-        # -----------------------------------------------------
-        # Parse Gmail message
-        # -----------------------------------------------------
-
-        parsed = parse_gmail_message(
-            full_message
-        )
-        logger.info(
-    "GMAIL MESSAGE PARSED | "
-    f"message_id={message_id} | "
-    f"sender={parsed.get('email')} | "
-    f"subject={parsed.get('subject')} | "
-    f"body={parsed.get('body', '')[:500]}"
-)
-        # -----------------------------------------------------
-        # Ignore non-leads
-        # -----------------------------------------------------
-
-        potential_lead = is_potential_lead(
-            parsed
+        messages = response.get(
+            "messages",
+            []
         )
 
         logger.info(
-            "GMAIL LEAD DETECTOR | "
-            f"message_id={message_id} | "
-            f"result={potential_lead}"
+            "GMAIL SYNC RESULT | "
+            f"messages_returned={len(messages)} | "
+            f"message_ids="
+            f"{[m.get('id') for m in messages]} | "
+            f"page_token={page_token}"
         )
 
-        if not potential_lead:
-
-            results["non_leads_skipped"] += 1
-
-            continue
-
         # -----------------------------------------------------
-        # Check for existing Gmail lead
+        # Process current page
         # -----------------------------------------------------
 
-        existing_lead = get_lead_by_source(
-            source_type="gmail",
-            source_id=message_id,
-            user_id=user_id,
-        )
+        for message in messages:
 
-        if existing_lead:
+            results["messages_checked"] += 1
 
-            results["duplicates_skipped"] += 1
-
-            logger.info(
-                f"Duplicate Gmail message "
-                f"{message_id} found. "
-                f"Existing lead status: "
-                f"{existing_lead.get('email_status')}"
+            message_id = message.get(
+                "id"
             )
 
-            # -------------------------------------------------
-            # Only mark an existing successfully processed
-            # lead as read.
-            #
-            # Failed leads remain unread so they can be
-            # retried on a future sync.
-            # -------------------------------------------------
+            if not message_id:
 
-            if existing_lead.get("email_status") != "failed":
-
-                try:
-
-                    logger.info(
-                        f"Attempting to mark Gmail message "
-                        f"{message_id} as READ"
-                    )
-
-                    mark_message_as_read(
-                        service=service,
-                        message_id=message_id,
-                    )
-
-                    logger.info(
-                        f"Gmail message "
-                        f"{message_id} marked as READ"
-                    )
-
-                except Exception:
-
-                    logger.exception(
-                        f"Failed to mark Gmail message "
-                        f"{message_id} as read"
-                    )
-
-            else:
-
-                logger.info(
-                    f"Gmail message {message_id} belongs "
-                    f"to a failed lead. Leaving message unread "
-                    f"for retry."
+                logger.warning(
+                    "Gmail message did not contain "
+                    "an ID. Skipping."
                 )
 
-            continue
+                continue
 
-        # -----------------------------------------------------
-        # Extract structured lead
-        # -----------------------------------------------------
+            try:
 
-        extracted = extract_lead_from_email(
-            parsed
+                # -------------------------------------------------
+                # Get full Gmail message
+                # -------------------------------------------------
+
+                full_message = (
+                    service
+                    .users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=message_id,
+                        format="full",
+                    )
+                    .execute()
+                )
+
+                logger.info(
+                    "GMAIL MESSAGE FETCHED | "
+                    f"message_id={message_id}"
+                )
+
+                # -------------------------------------------------
+                # Parse Gmail message
+                # -------------------------------------------------
+
+                parsed = parse_gmail_message(
+                    full_message
+                )
+
+                logger.info(
+                    "GMAIL MESSAGE PARSED | "
+                    f"message_id={message_id} | "
+                    f"sender={parsed.get('email')} | "
+                    f"subject={parsed.get('subject')} | "
+                    f"body="
+                    f"{parsed.get('body', '')[:500]}"
+                )
+
+                # -------------------------------------------------
+                # Ignore non-leads
+                # -------------------------------------------------
+
+                potential_lead = is_potential_lead(
+                    parsed
+                )
+
+                logger.info(
+                    "GMAIL LEAD DETECTOR | "
+                    f"message_id={message_id} | "
+                    f"result={potential_lead}"
+                )
+
+                if not potential_lead:
+
+                    results[
+                        "non_leads_skipped"
+                    ] += 1
+
+                    continue
+
+                # -------------------------------------------------
+                # Check for existing Gmail lead
+                # -------------------------------------------------
+
+                existing_lead = get_lead_by_source(
+                    source_type="gmail",
+                    source_id=message_id,
+                    user_id=user_id,
+                )
+
+                if existing_lead:
+
+                    results[
+                        "duplicates_skipped"
+                    ] += 1
+
+                    logger.info(
+                        f"Duplicate Gmail message "
+                        f"{message_id} found. "
+                        f"Existing lead status: "
+                        f"{existing_lead.get('email_status')}"
+                    )
+
+                    # ---------------------------------------------
+                    # Only mark an existing successfully processed
+                    # lead as read.
+                    #
+                    # Failed leads remain unread so they can be
+                    # retried on a future sync.
+                    # ---------------------------------------------
+
+                    if (
+                        existing_lead.get(
+                            "email_status"
+                        )
+                        != "failed"
+                    ):
+
+                        try:
+
+                            logger.info(
+                                f"Attempting to mark Gmail "
+                                f"message {message_id} as READ"
+                            )
+
+                            mark_message_as_read(
+                                service=service,
+                                message_id=message_id,
+                            )
+
+                            logger.info(
+                                f"Gmail message "
+                                f"{message_id} marked as READ"
+                            )
+
+                        except Exception:
+
+                            logger.exception(
+                                f"Failed to mark Gmail "
+                                f"message {message_id} as read"
+                            )
+
+                    else:
+
+                        logger.info(
+                            f"Gmail message "
+                            f"{message_id} belongs to a "
+                            f"failed lead. Leaving message "
+                            f"unread for retry."
+                        )
+
+                    continue
+
+                # -------------------------------------------------
+                # Extract structured lead
+                # -------------------------------------------------
+
+                extracted = (
+                    extract_lead_from_email(
+                        parsed
+                    )
+                )
+
+                # -------------------------------------------------
+                # Create Supabase lead
+                # -------------------------------------------------
+
+                saved_lead = save_lead(
+                    name=extracted.name,
+                    email=extracted.email,
+                    company=(
+                        extracted.company
+                        or "Unknown"
+                    ),
+                    website=extracted.website,
+                    job_title=extracted.job_title,
+                    message=extracted.message,
+                    source_type="gmail",
+                    source_id=message_id,
+                    user_id=user_id,
+                )
+
+                # -------------------------------------------------
+                # Update results
+                # -------------------------------------------------
+
+                results[
+                    "leads_created"
+                ] += 1
+
+                results[
+                    "created_leads"
+                ].append(
+                    saved_lead
+                )
+
+                logger.info(
+                    f"Created Gmail lead "
+                    f"{saved_lead.get('id')} "
+                    f"from message {message_id} "
+                    f"for user {user_id}"
+                )
+
+            except Exception as e:
+
+                # -------------------------------------------------
+                # Isolate failures to this individual message.
+                #
+                # The rest of the Gmail sync should continue.
+                # -------------------------------------------------
+
+                logger.exception(
+                    f"Failed to process Gmail message "
+                    f"{message_id} for user {user_id}"
+                )
+
+                results[
+                    "failed_messages"
+                ].append(
+                    {
+                        "message_id": message_id,
+                        "error": str(e),
+                    }
+                )
+
+                continue
+
+        # ---------------------------------------------------------
+        # Check for another Gmail page
+        # ---------------------------------------------------------
+
+        page_token = response.get(
+            "nextPageToken"
         )
 
-        # -----------------------------------------------------
-        # Create Supabase lead
-        # -----------------------------------------------------
-
-        saved_lead = save_lead(
-            name=extracted.name,
-            email=extracted.email,
-            company=extracted.company or "Unknown",
-            website=extracted.website,
-            job_title=extracted.job_title,
-            message=extracted.message,
-            source_type="gmail",
-            source_id=message_id,
-            user_id=user_id,
-        )
-
-        # -----------------------------------------------------
-        # Update results
-        # -----------------------------------------------------
-
-        results["leads_created"] += 1
-
-        results["created_leads"].append(
-            saved_lead
-        )
-
-        logger.info(
-            f"Created Gmail lead "
-            f"{saved_lead.get('id')} "
-            f"from message {message_id} "
-            f"for user {user_id}"
-        )
+        if not page_token:
+            break
 
     return results
