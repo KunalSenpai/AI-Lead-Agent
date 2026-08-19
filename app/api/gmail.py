@@ -49,9 +49,11 @@ GOOGLE_CLIENT_SECRET_FILE = os.getenv(
     "credentials/gmail_web_credentials.json",
 )
 
-GOOGLE_REDIRECT_URI = (
-    "http://127.0.0.1:8000/gmail/oauth/callback"
+GOOGLE_REDIRECT_URI = os.getenv(
+    "GOOGLE_REDIRECT_URI",
+    "http://127.0.0.1:8000/gmail/oauth/callback",
 )
+
 FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
     "http://localhost:5173",
