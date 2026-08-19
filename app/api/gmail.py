@@ -44,8 +44,9 @@ GOOGLE_CLIENT_ID = os.getenv(
     "GOOGLE_CLIENT_ID"
 )
 
-GOOGLE_CLIENT_SECRET_FILE = (
-    "credentials/gmail_web_credentials.json"
+GOOGLE_CLIENT_SECRET_FILE = os.getenv(
+    "GOOGLE_CLIENT_SECRET_FILE",
+    "credentials/gmail_web_credentials.json",
 )
 
 GOOGLE_REDIRECT_URI = (
