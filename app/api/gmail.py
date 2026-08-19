@@ -15,8 +15,10 @@ from app.tools.database import (
     get_gmail_connection,
     delete_gmail_connection,
 )
-
-
+from app.tools.gmail_oauth import (
+    create_oauth_state,
+    verify_oauth_state,
+)
 # ---------------------------------------------------------
 # Load environment variables
 # ---------------------------------------------------------
@@ -119,12 +121,13 @@ def connect_gmail(
         "scope": " ".join(GMAIL_SCOPES),
         "access_type": "offline",
         "prompt": "consent",
-
-        # Temporary state implementation.
-        # We will replace this with a secure
-        # server-side OAuth state mechanism later.
-        "state": str(user.id),
+        "state": state,
     }
+
+    state = create_oauth_state(
+            user_id=str(user.id),
+        )
+
 
     authorization_url = (
         "https://accounts.google.com/o/oauth2/v2/auth?"
@@ -176,15 +179,20 @@ def gmail_oauth_callback(
             )
 
         # -------------------------------------------------
-        # Get application user ID
+        # Validate OAuth state
         # -------------------------------------------------
 
-        user_id = state
+        try:
 
-        if not user_id:
+            user_id = verify_oauth_state(
+                state
+            )
+
+        except ValueError as e:
+
             raise HTTPException(
                 status_code=400,
-                detail="Missing OAuth state",
+                detail=str(e),
             )
 
         # -------------------------------------------------

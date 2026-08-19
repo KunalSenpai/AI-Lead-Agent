@@ -1016,36 +1016,43 @@ def sync_gmail(
         # =================================================
 
         return {
-            "success": True,
+    "success": True,
 
-            "messages_checked": (
-                ingestion_result[
-                    "messages_checked"
-                ]
-            ),
+    "messages_checked": (
+        ingestion_result[
+            "messages_checked"
+        ]
+    ),
 
-            "leads_created": (
-                ingestion_result[
-                    "leads_created"
-                ]
-            ),
+    "leads_created": (
+        ingestion_result[
+            "leads_created"
+        ]
+    ),
 
-            "duplicates_skipped": (
-                ingestion_result[
-                    "duplicates_skipped"
-                ]
-            ),
+    "duplicates_skipped": (
+        ingestion_result[
+            "duplicates_skipped"
+        ]
+    ),
 
-            "non_leads_skipped": (
-                ingestion_result[
-                    "non_leads_skipped"
-                ]
-            ),
+    "non_leads_skipped": (
+        ingestion_result[
+            "non_leads_skipped"
+        ]
+    ),
 
-            "processed_leads": processed_leads,
+    "failed_messages": (
+        ingestion_result.get(
+            "failed_messages",
+            [],
+        )
+    ),
 
-            "failed_leads": failed_leads,
-        }
+    "processed_leads": processed_leads,
+
+    "failed_leads": failed_leads,
+}
 
     except HTTPException:
 
