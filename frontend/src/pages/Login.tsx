@@ -1,6 +1,11 @@
 import { FormEvent, useState } from "react";
 import { supabase } from "../lib/supabase";
 
+const BASE = (
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://127.0.0.1:8000"
+).replace(/\/$/, "");
+
 export function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -46,9 +51,8 @@ export function Login() {
       // -----------------------------------------
       // Step 3: Send token to FastAPI
       // -----------------------------------------
-
       const response = await fetch(
-        "http://127.0.0.1:8000/auth/me",
+        `${BASE}/auth/me`,
         {
           method: "GET",
           headers: {
