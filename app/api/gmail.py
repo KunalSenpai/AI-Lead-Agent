@@ -1,3 +1,4 @@
+import json
 import os
 from urllib.parse import urlencode
 
@@ -15,10 +16,13 @@ from app.tools.database import (
     get_gmail_connection,
     delete_gmail_connection,
 )
+
 from app.tools.gmail_oauth import (
     create_oauth_state,
     verify_oauth_state,
 )
+
+
 # ---------------------------------------------------------
 # Load environment variables
 # ---------------------------------------------------------
@@ -49,6 +53,10 @@ GOOGLE_CLIENT_SECRET_FILE = os.getenv(
     "credentials/gmail_web_credentials.json",
 )
 
+GOOGLE_CLIENT_SECRET_JSON = os.getenv(
+    "GOOGLE_CLIENT_SECRET_JSON"
+)
+
 GOOGLE_REDIRECT_URI = os.getenv(
     "GOOGLE_REDIRECT_URI",
     "http://127.0.0.1:8000/gmail/oauth/callback",
@@ -72,8 +80,100 @@ GMAIL_SCOPES = [
 
 
 # ---------------------------------------------------------
+# Google OAuth helpers
+# ---------------------------------------------------------
+
+
+def _get_google_client_config() -> dict:
+    """
+    Return the Google OAuth client configuration.
+
+    Production:
+        GOOGLE_CLIENT_SECRET_JSON contains the complete
+        Google OAuth JSON object.
+
+    Local development:
+        GOOGLE_CLIENT_SECRET_FILE points to the local
+        credentials JSON file.
+    """
+
+    if GOOGLE_CLIENT_SECRET_JSON:
+        try:
+            client_config = json.loads(
+                GOOGLE_CLIENT_SECRET_JSON
+            )
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "GOOGLE_CLIENT_SECRET_JSON contains invalid JSON"
+            ) from exc
+
+        if not isinstance(client_config, dict):
+            raise RuntimeError(
+                "GOOGLE_CLIENT_SECRET_JSON must contain a JSON object"
+            )
+
+        if "web" not in client_config:
+            raise RuntimeError(
+                "GOOGLE_CLIENT_SECRET_JSON must contain a 'web' object"
+            )
+
+        return client_config
+
+    if not os.path.exists(
+        GOOGLE_CLIENT_SECRET_FILE
+    ):
+        raise RuntimeError(
+            "Google Web OAuth credentials file "
+            "was not found at "
+            f"{GOOGLE_CLIENT_SECRET_FILE}"
+        )
+
+    try:
+        with open(
+            GOOGLE_CLIENT_SECRET_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            client_config = json.load(file)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Google Web OAuth credentials file contains invalid JSON"
+        ) from exc
+
+    if not isinstance(client_config, dict):
+        raise RuntimeError(
+            "Google Web OAuth credentials must contain a JSON object"
+        )
+
+    if "web" not in client_config:
+        raise RuntimeError(
+            "Google Web OAuth credentials must contain a 'web' object"
+        )
+
+    return client_config
+
+
+def _create_google_flow() -> Flow:
+    """
+    Create the Google OAuth flow from either:
+
+    1. GOOGLE_CLIENT_SECRET_JSON, or
+    2. GOOGLE_CLIENT_SECRET_FILE.
+    """
+
+    client_config = _get_google_client_config()
+
+    return Flow.from_client_config(
+        client_config,
+        scopes=GMAIL_SCOPES,
+        redirect_uri=GOOGLE_REDIRECT_URI,
+    )
+
+
+# ---------------------------------------------------------
 # Start Gmail OAuth
 # ---------------------------------------------------------
+
 
 @router.get("/connect")
 def connect_gmail(
@@ -84,70 +184,60 @@ def connect_gmail(
     authenticated application user.
     """
 
-    # -----------------------------------------------------
-    # Make sure Google client ID exists
-    # -----------------------------------------------------
-
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(
             status_code=500,
             detail=(
                 "GOOGLE_CLIENT_ID is not configured "
-                "in the backend .env file"
+                "in the backend environment"
             ),
         )
 
-    # -----------------------------------------------------
-    # Make sure Web OAuth credentials exist
-    # -----------------------------------------------------
+    try:
+        # Validate OAuth credentials before
+        # generating the authorization URL.
+        _get_google_client_config()
 
-    if not os.path.exists(
-        GOOGLE_CLIENT_SECRET_FILE
-    ):
+        state = create_oauth_state(
+            user_id=str(user.id),
+        )
+
+        params = {
+            "client_id": GOOGLE_CLIENT_ID,
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "response_type": "code",
+            "scope": " ".join(GMAIL_SCOPES),
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state,
+        }
+
+        authorization_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth?"
+            + urlencode(params)
+        )
+
+        return {
+            "success": True,
+            "authorization_url": authorization_url,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=(
-                "Google Web OAuth credentials file "
-                "was not found at "
-                f"{GOOGLE_CLIENT_SECRET_FILE}"
+                f"Failed to start Gmail OAuth: {str(e)}"
             ),
         )
-
-    # -----------------------------------------------------
-    # Build Google authorization URL
-    # -----------------------------------------------------
-    state = create_oauth_state(
-                user_id=str(user.id),
-            )
-    params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
-        "response_type": "code",
-        "scope": " ".join(GMAIL_SCOPES),
-        "access_type": "offline",
-        "prompt": "consent",
-        "state": state,
-    }
-
-
-    authorization_url = (
-        "https://accounts.google.com/o/oauth2/v2/auth?"
-        + urlencode(params)
-    )
-
-    # -----------------------------------------------------
-    # Return URL to frontend
-    # -----------------------------------------------------
-
-    return {
-        "success": True,
-        "authorization_url": authorization_url,
-    }
 
 
 # ---------------------------------------------------------
 # Google OAuth callback
 # ---------------------------------------------------------
+
 
 @router.get("/oauth/callback")
 def gmail_oauth_callback(
@@ -164,33 +254,15 @@ def gmail_oauth_callback(
     try:
 
         # -------------------------------------------------
-        # Validate OAuth credentials file
-        # -------------------------------------------------
-
-        if not os.path.exists(
-            GOOGLE_CLIENT_SECRET_FILE
-        ):
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Google Web OAuth credentials file "
-                    "was not found at "
-                    f"{GOOGLE_CLIENT_SECRET_FILE}"
-                ),
-            )
-
-        # -------------------------------------------------
         # Validate OAuth state
         # -------------------------------------------------
 
         try:
-
             user_id = verify_oauth_state(
                 state
             )
 
         except ValueError as e:
-
             raise HTTPException(
                 status_code=400,
                 detail=str(e),
@@ -200,11 +272,7 @@ def gmail_oauth_callback(
         # Create OAuth flow
         # -------------------------------------------------
 
-        flow = Flow.from_client_secrets_file(
-            GOOGLE_CLIENT_SECRET_FILE,
-            scopes=GMAIL_SCOPES,
-            redirect_uri=GOOGLE_REDIRECT_URI,
-        )
+        flow = _create_google_flow()
 
         # -------------------------------------------------
         # Exchange authorization code for credentials
@@ -283,19 +351,28 @@ def gmail_oauth_callback(
         # -------------------------------------------------
 
         return RedirectResponse(
-            url=f"{FRONTEND_URL}/dashboard?gmail=connected"
-)
+            url=(
+                f"{FRONTEND_URL}"
+                "/dashboard?gmail=connected"
+            )
+        )
+
     except HTTPException:
         raise
 
     except Exception as e:
-
         raise HTTPException(
             status_code=500,
             detail=(
                 f"Gmail OAuth failed: {str(e)}"
             ),
         )
+
+
+# ---------------------------------------------------------
+# Gmail status
+# ---------------------------------------------------------
+
 
 @router.get("/status")
 def gmail_status(
@@ -313,7 +390,6 @@ def gmail_status(
         )
 
         if not connection:
-
             return {
                 "connected": False,
                 "gmail_email": None,
@@ -327,7 +403,6 @@ def gmail_status(
         }
 
     except Exception as e:
-
         raise HTTPException(
             status_code=500,
             detail=(
@@ -335,6 +410,12 @@ def gmail_status(
                 f"{str(e)}"
             ),
         )
+
+
+# ---------------------------------------------------------
+# Gmail disconnect
+# ---------------------------------------------------------
+
 
 @router.delete("/disconnect")
 def disconnect_gmail(
@@ -353,7 +434,6 @@ def disconnect_gmail(
         )
 
         if not connection:
-
             return {
                 "success": True,
                 "message": "Gmail is already disconnected",
@@ -369,7 +449,6 @@ def disconnect_gmail(
         }
 
     except Exception as e:
-
         raise HTTPException(
             status_code=500,
             detail=(
