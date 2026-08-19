@@ -92,6 +92,7 @@ def save_lead(
 
     return response.data[0]
 
+
 def get_lead(
     lead_id: int,
     user_id: str,
@@ -169,6 +170,7 @@ def get_lead_by_source(
 
 def save_analysis_score_research_and_email(
     lead_id,
+    user_id: str,
     industry: str,
     company_size: int | None,
     lead_volume: int | None,
@@ -181,8 +183,15 @@ def save_analysis_score_research_and_email(
     email_subject: str,
     email_body: str,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when saving pipeline results"
+        )
+
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("leads")
         .update({
             # AI analysis
@@ -210,6 +219,10 @@ def save_analysis_score_research_and_email(
         .eq(
             "id",
             lead_id,
+        )
+        .eq(
+            "user_id",
+            user_id,
         )
         .execute()
     )
