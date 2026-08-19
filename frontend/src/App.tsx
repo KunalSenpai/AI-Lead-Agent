@@ -3,11 +3,16 @@ import {
   Routes,
   Route,
   Navigate,
+  Outlet,
   useLocation,
 } from "react-router-dom";
 
+import { useEffect, useState } from "react";
+
 import { AppShell } from "./components/layout/AppShell";
 import { ToastProvider } from "./components/ui/Toast";
+
+import { supabase } from "./lib/supabase";
 
 import { Dashboard } from "./pages/Dashboard";
 import { Leads } from "./pages/Leads";
@@ -41,52 +46,110 @@ function pageTitle(pathname: string): string {
   return "AI Lead Agent";
 }
 
+function ProtectedRoute() {
+  const [loading, setLoading] = useState(true);
+  const [authenticated, setAuthenticated] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function checkSession() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      setAuthenticated(Boolean(session));
+      setLoading(false);
+    }
+
+    checkSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (!mounted) return;
+
+        setAuthenticated(Boolean(session));
+        setLoading(false);
+      }
+    );
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  if (loading) {
+    return <div>Checking authentication...</div>;
+  }
+
+  if (!authenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <Outlet />;
+}
+
 function Shell() {
   const location = useLocation();
 
   return (
     <AppShell title={pageTitle(location.pathname)}>
       <Routes>
+        {/* Public route */}
         <Route path="/login" element={<Login />} />
 
-        <Route
-          path="/"
-          element={<Navigate to="/dashboard" replace />}
-        />
+        {/* Protected application routes */}
+        <Route element={<ProtectedRoute />}>
+          <Route
+            path="/"
+            element={<Navigate to="/dashboard" replace />}
+          />
 
-        <Route path="/dashboard" element={<Dashboard />} />
+          <Route
+            path="/dashboard"
+            element={<Dashboard />}
+          />
 
-        <Route path="/leads" element={<Leads />} />
+          <Route
+            path="/leads"
+            element={<Leads />}
+          />
 
-        <Route
-          path="/leads/new"
-          element={<AddLead />}
-        />
+          <Route
+            path="/leads/new"
+            element={<AddLead />}
+          />
 
-        <Route
-          path="/leads/:id"
-          element={<LeadDetail />}
-        />
+          <Route
+            path="/leads/:id"
+            element={<LeadDetail />}
+          />
 
-        <Route
-          path="/pending"
-          element={<Pending />}
-        />
+          <Route
+            path="/pending"
+            element={<Pending />}
+          />
 
-        <Route
-          path="/sent"
-          element={<Sent />}
-        />
+          <Route
+            path="/sent"
+            element={<Sent />}
+          />
 
-        <Route
-          path="/settings"
-          element={<Settings />}
-        />
+          <Route
+            path="/settings"
+            element={<Settings />}
+          />
 
-        <Route
-          path="*"
-          element={<Navigate to="/dashboard" replace />}
-        />
+          <Route
+            path="*"
+            element={<Navigate to="/dashboard" replace />}
+          />
+        </Route>
       </Routes>
     </AppShell>
   );
