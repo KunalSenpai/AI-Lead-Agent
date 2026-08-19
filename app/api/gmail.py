@@ -113,7 +113,9 @@ def connect_gmail(
     # -----------------------------------------------------
     # Build Google authorization URL
     # -----------------------------------------------------
-
+    state = create_oauth_state(
+                user_id=str(user.id),
+            )
     params = {
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": GOOGLE_REDIRECT_URI,
@@ -123,10 +125,6 @@ def connect_gmail(
         "prompt": "consent",
         "state": state,
     }
-
-    state = create_oauth_state(
-            user_id=str(user.id),
-        )
 
 
     authorization_url = (

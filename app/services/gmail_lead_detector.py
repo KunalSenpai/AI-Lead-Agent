@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 
@@ -7,14 +8,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+logger = logging.getLogger(__name__)
+
+
 GMAIL_USER_EMAIL = (
     os.getenv("GMAIL_USER_EMAIL") or ""
 ).lower().strip()
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Sender/domain exclusions
-# ---------------------------------------------------------
+# =========================================================
 
 IGNORED_SENDER_DOMAINS = {
     "googlemail.com",
@@ -45,9 +49,9 @@ AUTOMATED_SENDER_PREFIXES = {
 }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Strong non-lead / transactional signals
-# ---------------------------------------------------------
+# =========================================================
 
 NON_LEAD_KEYWORDS = {
     # Account verification
@@ -103,9 +107,9 @@ NON_LEAD_KEYWORDS = {
 }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Marketing signals
-# ---------------------------------------------------------
+# =========================================================
 
 MARKETING_KEYWORDS = {
     "unsubscribe",
@@ -128,9 +132,9 @@ MARKETING_KEYWORDS = {
 }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Strong lead intent phrases
-# ---------------------------------------------------------
+# =========================================================
 
 STRONG_LEAD_PHRASES = {
     "i am interested",
@@ -169,9 +173,9 @@ STRONG_LEAD_PHRASES = {
 }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Existing lead keywords
-# ---------------------------------------------------------
+# =========================================================
 
 LEAD_KEYWORDS = {
     "interested",
@@ -192,9 +196,9 @@ LEAD_KEYWORDS = {
 }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # Business-context keywords
-# ---------------------------------------------------------
+# =========================================================
 
 BUSINESS_CONTEXT_KEYWORDS = {
     "company",
@@ -310,26 +314,24 @@ def is_potential_lead(
     # -----------------------------------------------------
 
     content = f"{subject}\n{body}"
-    print("===== GMAIL DETECTOR DEBUG =====")
-    print("SUBJECT:", subject)
-    print("BODY:", body)
-    print(
-        "STRONG PHRASE MATCHES:",
-        [
+
+    logger.debug(
+        "GMAIL DETECTOR DEBUG | "
+        f"sender={sender_email} | "
+        f"subject={subject} | "
+        f"strong_phrase_matches="
+        f"{[
             phrase
             for phrase in STRONG_LEAD_PHRASES
             if phrase in content
-        ],
-    )
-    print(
-        "NON-LEAD MATCHES:",
-        [
+        ]} | "
+        f"non_lead_matches="
+        f"{[
             phrase
             for phrase in NON_LEAD_KEYWORDS
             if phrase in content
-        ],
+        ]}"
     )
-    print("================================")
 
     # -----------------------------------------------------
     # Strong non-lead signals

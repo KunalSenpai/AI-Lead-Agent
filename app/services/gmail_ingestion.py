@@ -79,7 +79,12 @@ def fetch_and_create_gmail_leads(
 
         list_kwargs = {
             "userId": "me",
-            "q": "is:unread",
+            "q": (
+                "in:inbox "
+                "is:unread "
+                "newer_than:90d "
+                "-category:promotions"
+            ),
             "maxResults": max_results,
         }
 
