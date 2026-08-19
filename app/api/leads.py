@@ -52,6 +52,7 @@ class EmailApprovalRequest(BaseModel):
 def process_lead(
     lead: Lead,
     lead_id: int,
+    user,
 ):
     """
     Run the complete AI processing pipeline.
@@ -209,6 +210,7 @@ def process_lead(
         updated_lead = (
             save_analysis_score_research_and_email(
                 lead_id=lead_id,
+                user_id=str(user.id),
 
                 # AI analysis
                 industry=analysis.industry,
@@ -354,8 +356,8 @@ def create_lead(
         return process_lead(
             lead=lead,
             lead_id=lead_id,
-        )
-
+            user=user,
+)
     except HTTPException:
 
         try:
