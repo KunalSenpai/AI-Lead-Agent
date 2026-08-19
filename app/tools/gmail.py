@@ -1,5 +1,7 @@
 import os
 import base64
+import json
+import logging
 
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -14,9 +16,10 @@ from app.tools.database import (
     get_gmail_connection,
     update_gmail_connection_tokens,
 )
-import logging
+
 
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------
 # Gmail permissions
@@ -42,14 +45,138 @@ TOKEN_FILE = "token.json"
 
 # ---------------------------------------------------------
 # Web OAuth credentials
-#
-# This is the credential file used when the user
-# connected Gmail through /gmail/connect.
 # ---------------------------------------------------------
 
-WEB_CREDENTIALS_FILE = (
-    "credentials/gmail_web_credentials.json"
+WEB_CREDENTIALS_FILE = os.getenv(
+    "GOOGLE_CLIENT_SECRET_FILE",
+    "credentials/gmail_web_credentials.json",
 )
+
+GOOGLE_CLIENT_SECRET_JSON = os.getenv(
+    "GOOGLE_CLIENT_SECRET_JSON"
+)
+
+
+# ---------------------------------------------------------
+# Google OAuth configuration
+# ---------------------------------------------------------
+
+
+def _get_web_oauth_config() -> dict:
+    """
+    Return the Google Web OAuth client configuration.
+
+    Production:
+        GOOGLE_CLIENT_SECRET_JSON contains the complete
+        Google OAuth JSON object.
+
+    Local development:
+        GOOGLE_CLIENT_SECRET_FILE points to the local
+        credentials JSON file.
+    """
+
+    # -----------------------------------------------------
+    # Production: environment variable
+    # -----------------------------------------------------
+
+    if GOOGLE_CLIENT_SECRET_JSON:
+        try:
+            oauth_config = json.loads(
+                GOOGLE_CLIENT_SECRET_JSON
+            )
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "GOOGLE_CLIENT_SECRET_JSON contains invalid JSON"
+            ) from exc
+
+        if not isinstance(oauth_config, dict):
+            raise ValueError(
+                "GOOGLE_CLIENT_SECRET_JSON must contain a JSON object"
+            )
+
+        web_config = oauth_config.get("web")
+
+        if not isinstance(web_config, dict):
+            raise ValueError(
+                "GOOGLE_CLIENT_SECRET_JSON must contain "
+                "a 'web' configuration"
+            )
+
+        return oauth_config
+
+    # -----------------------------------------------------
+    # Local development: credentials file
+    # -----------------------------------------------------
+
+    if not os.path.exists(
+        WEB_CREDENTIALS_FILE
+    ):
+        raise ValueError(
+            "Google Web OAuth credentials file "
+            "was not found at "
+            f"{WEB_CREDENTIALS_FILE}"
+        )
+
+    try:
+        with open(
+            WEB_CREDENTIALS_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            oauth_config = json.load(file)
+
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "Google Web OAuth credentials file contains invalid JSON"
+        ) from exc
+
+    if not isinstance(oauth_config, dict):
+        raise ValueError(
+            "Google Web OAuth credentials must contain "
+            "a JSON object"
+        )
+
+    web_config = oauth_config.get("web")
+
+    if not isinstance(web_config, dict):
+        raise ValueError(
+            "Invalid Google Web OAuth credentials: "
+            "missing 'web' configuration"
+        )
+
+    return oauth_config
+
+
+def _get_web_oauth_client_credentials() -> tuple[str, str]:
+    """
+    Return the Google OAuth client ID and client secret.
+    """
+
+    oauth_config = _get_web_oauth_config()
+
+    web_config = oauth_config.get("web")
+
+    client_id = web_config.get(
+        "client_id"
+    )
+
+    client_secret = web_config.get(
+        "client_secret"
+    )
+
+    if not client_id:
+        raise ValueError(
+            "Google Web OAuth credentials are missing "
+            "client_id"
+        )
+
+    if not client_secret:
+        raise ValueError(
+            "Google Web OAuth credentials are missing "
+            "client_secret"
+        )
+
+    return client_id, client_secret
 
 
 # ---------------------------------------------------------
@@ -61,6 +188,7 @@ WEB_CREDENTIALS_FILE = (
 #     get_gmail_service_for_user(user_id)
 # ---------------------------------------------------------
 
+
 def get_gmail_service():
     creds = None
 
@@ -68,8 +196,9 @@ def get_gmail_service():
     # Check for existing local token
     # -----------------------------------------------------
 
-    if os.path.exists(TOKEN_FILE):
-
+    if os.path.exists(
+        TOKEN_FILE
+    ):
         creds = (
             Credentials
             .from_authorized_user_file(
@@ -136,6 +265,7 @@ def get_gmail_service():
 # Per-user Gmail service
 # ---------------------------------------------------------
 
+
 def get_gmail_service_for_user(
     user_id: str,
 ):
@@ -184,59 +314,17 @@ def get_gmail_service_for_user(
 
     # -----------------------------------------------------
     # Read OAuth client information
-    # from the Web OAuth credentials file
+    #
+    # Production:
+    #   GOOGLE_CLIENT_SECRET_JSON
+    #
+    # Local:
+    #   GOOGLE_CLIENT_SECRET_FILE
     # -----------------------------------------------------
 
-    if not os.path.exists(
-        WEB_CREDENTIALS_FILE
-    ):
-        raise ValueError(
-            "Google Web OAuth credentials file "
-            "was not found at "
-            f"{WEB_CREDENTIALS_FILE}"
-        )
-
-    import json
-
-    with open(
-        WEB_CREDENTIALS_FILE,
-        "r",
-        encoding="utf-8",
-    ) as file:
-
-        oauth_config = json.load(file)
-
-    # Google Web OAuth credentials normally have
-    # the client configuration under "web".
-    web_config = oauth_config.get(
-        "web"
+    client_id, client_secret = (
+        _get_web_oauth_client_credentials()
     )
-
-    if not web_config:
-        raise ValueError(
-            "Invalid Google Web OAuth credentials file: "
-            "missing 'web' configuration"
-        )
-
-    client_id = web_config.get(
-        "client_id"
-    )
-
-    client_secret = web_config.get(
-        "client_secret"
-    )
-
-    if not client_id:
-        raise ValueError(
-            "Google Web OAuth credentials are missing "
-            "client_id"
-        )
-
-    if not client_secret:
-        raise ValueError(
-            "Google Web OAuth credentials are missing "
-            "client_secret"
-        )
 
     # -----------------------------------------------------
     # Convert stored expiry to datetime
@@ -255,10 +343,12 @@ def get_gmail_service_for_user(
             # Google authentication expects a timezone-naive
             # UTC datetime for credential expiry.
             if expiry.tzinfo is not None:
-                expiry = expiry.astimezone(
-                    timezone.utc
-                ).replace(
-                    tzinfo=None
+                expiry = (
+                    expiry
+                    .astimezone(timezone.utc)
+                    .replace(
+                        tzinfo=None
+                    )
                 )
 
         except ValueError:
@@ -299,7 +389,7 @@ def get_gmail_service_for_user(
         except RefreshError as e:
 
             logger.exception(
-                f"Failed to refresh Gmail credentials "
+                "Failed to refresh Gmail credentials "
                 f"for user {user_id}"
             )
 
@@ -318,7 +408,8 @@ def get_gmail_service_for_user(
         if credentials.expiry:
 
             new_expiry = (
-                credentials.expiry
+                credentials
+                .expiry
                 .astimezone()
                 .isoformat()
             )
@@ -331,6 +422,7 @@ def get_gmail_service_for_user(
             ),
             token_expiry=new_expiry,
         )
+
     # -----------------------------------------------------
     # Build Gmail API service
     # -----------------------------------------------------
@@ -345,6 +437,7 @@ def get_gmail_service_for_user(
 # ---------------------------------------------------------
 # Send email for a specific application user
 # ---------------------------------------------------------
+
 
 def send_email(
     recipient: str,
@@ -419,9 +512,11 @@ def send_email(
 
     return sent_message
 
+
 # ---------------------------------------------------------
 # Mark Gmail message as read
 # ---------------------------------------------------------
+
 
 def mark_message_as_read(
     service,
