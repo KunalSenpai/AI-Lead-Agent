@@ -61,8 +61,15 @@ def save_lead(
     source_id: str | None = None,
     user_id: str | None = None,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when saving a lead"
+        )
+
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("leads")
         .insert({
             "name": name,
@@ -84,7 +91,6 @@ def save_lead(
         )
 
     return response.data[0]
-
 
 def get_lead(
     lead_id: int,
