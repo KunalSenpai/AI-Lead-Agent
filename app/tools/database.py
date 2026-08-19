@@ -97,8 +97,15 @@ def get_lead(
     lead_id: int,
     user_id: str,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when fetching a lead"
+        )
+
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("leads")
         .select("*")
         .eq("id", lead_id)
@@ -114,13 +121,19 @@ def get_lead(
 
     return response.data[0]
 
-
 def list_leads(
     user_id: str,
     status: str | None = None,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when listing leads"
+        )
+
+    supabase_admin = get_supabase_admin()
+
     query = (
-        supabase
+        supabase_admin
         .table("leads")
         .select("*")
         .eq("user_id", user_id)
@@ -139,7 +152,6 @@ def list_leads(
     response = query.execute()
 
     return response.data
-
 
 def get_lead_by_source(
     source_type: str,
