@@ -11,6 +11,10 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+SUPABASE_SERVICE_ROLE_KEY = os.getenv(
+    "SUPABASE_SERVICE_ROLE_KEY"
+)
+
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError(
@@ -24,9 +28,27 @@ supabase: Client = create_client(
 )
 
 
+def get_supabase_admin() -> Client:
+    """
+    Create a privileged Supabase client for trusted
+    server-side operations that need to bypass RLS.
+    """
+
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise ValueError(
+            "SUPABASE_SERVICE_ROLE_KEY is missing"
+        )
+
+    return create_client(
+        SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE_KEY,
+    )
+
+
 # =========================================================
 # LEADS
 # =========================================================
+
 
 def save_lead(
     name: str,
@@ -138,6 +160,7 @@ def get_lead_by_source(
 # AI ANALYSIS / SCORE / RESEARCH / EMAIL
 # =========================================================
 
+
 def save_analysis_score_research_and_email(
     lead_id,
     industry: str,
@@ -196,6 +219,7 @@ def save_analysis_score_research_and_email(
 # =========================================================
 # EMAIL STATUS
 # =========================================================
+
 
 def update_email_status(
     lead_id: int,
@@ -321,6 +345,7 @@ def mark_email_as_sent(
 # GMAIL CONNECTION
 # =========================================================
 
+
 def save_gmail_connection(
     user_id: str,
     gmail_email: str,
@@ -328,8 +353,10 @@ def save_gmail_connection(
     refresh_token: str | None,
     token_expiry: str | None,
 ):
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("gmail_connections")
         .upsert(
             {
@@ -358,8 +385,10 @@ def save_gmail_connection(
 def get_gmail_connection(
     user_id: str,
 ):
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("gmail_connections")
         .select("*")
         .eq(
@@ -384,8 +413,10 @@ def delete_gmail_connection(
     the authenticated application user.
     """
 
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("gmail_connections")
         .delete()
         .eq(
@@ -416,8 +447,10 @@ def update_gmail_connection_tokens(
     if refresh_token:
         update_data["refresh_token"] = refresh_token
 
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("gmail_connections")
         .update(update_data)
         .eq(
