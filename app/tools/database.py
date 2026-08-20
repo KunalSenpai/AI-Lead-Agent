@@ -5,12 +5,14 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 
 
-load_dotenv()
+# =========================================================
+# Environment
+# =========================================================
 
+load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 SUPABASE_SERVICE_ROLE_KEY = os.getenv(
     "SUPABASE_SERVICE_ROLE_KEY"
 )
@@ -21,7 +23,17 @@ if not SUPABASE_URL or not SUPABASE_KEY:
         "SUPABASE_URL or SUPABASE_KEY is missing from .env"
     )
 
+SUPABASE_SERVICE_ROLE_KEY = os.getenv(
+    "SUPABASE_SERVICE_ROLE_KEY"
+)
 
+
+# =========================================================
+# Supabase clients
+# =========================================================
+
+# Keep the normal client available for compatibility with
+# existing imports elsewhere in the application.
 supabase: Client = create_client(
     SUPABASE_URL,
     SUPABASE_KEY,
@@ -29,11 +41,6 @@ supabase: Client = create_client(
 
 
 def get_supabase_admin() -> Client:
-    """
-    Create a privileged Supabase client for trusted
-    server-side operations that need to bypass RLS.
-    """
-
     if not SUPABASE_SERVICE_ROLE_KEY:
         raise ValueError(
             "SUPABASE_SERVICE_ROLE_KEY is missing"
@@ -108,8 +115,14 @@ def get_lead(
         supabase_admin
         .table("leads")
         .select("*")
-        .eq("id", lead_id)
-        .eq("user_id", user_id)
+        .eq(
+            "id",
+            lead_id,
+        )
+        .eq(
+            "user_id",
+            user_id,
+        )
         .limit(1)
         .execute()
     )
@@ -120,6 +133,7 @@ def get_lead(
         )
 
     return response.data[0]
+
 
 def list_leads(
     user_id: str,
@@ -136,7 +150,10 @@ def list_leads(
         supabase_admin
         .table("leads")
         .select("*")
-        .eq("user_id", user_id)
+        .eq(
+            "user_id",
+            user_id,
+        )
         .order(
             "created_at",
             desc=True,
@@ -153,18 +170,35 @@ def list_leads(
 
     return response.data
 
+
 def get_lead_by_source(
     source_type: str,
     source_id: str,
     user_id: str,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when finding a lead by source"
+        )
+
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("leads")
         .select("*")
-        .eq("source_type", source_type)
-        .eq("source_id", source_id)
-        .eq("user_id", user_id)
+        .eq(
+            "source_type",
+            source_type,
+        )
+        .eq(
+            "source_id",
+            source_id,
+        )
+        .eq(
+            "user_id",
+            user_id,
+        )
         .limit(1)
         .execute()
     )
@@ -265,13 +299,20 @@ def update_email_status(
         "failed",
     }
 
+    if not user_id:
+        raise ValueError(
+            "user_id is required when updating email status"
+        )
+
     if status not in allowed_statuses:
         raise ValueError(
             f"Invalid email status: {status}"
         )
 
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("leads")
         .update({
             "email_status": status,
@@ -301,8 +342,15 @@ def update_email_draft(
     body: str,
     user_id: str,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when updating email"
+        )
+
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("leads")
         .update({
             "email_subject": subject,
@@ -341,12 +389,24 @@ def mark_email_as_sent(
     user cannot modify another user's lead.
     """
 
+    if not user_id:
+        raise ValueError(
+            "user_id is required when marking email as sent"
+        )
+
+    if not gmail_message_id:
+        raise ValueError(
+            "gmail_message_id is required when marking email as sent"
+        )
+
     sent_at = datetime.now(
         timezone.utc
     ).isoformat()
 
+    supabase_admin = get_supabase_admin()
+
     response = (
-        supabase
+        supabase_admin
         .table("leads")
         .update({
             "email_status": "sent",
@@ -384,6 +444,11 @@ def save_gmail_connection(
     refresh_token: str | None,
     token_expiry: str | None,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when saving Gmail connection"
+        )
+
     supabase_admin = get_supabase_admin()
 
     response = (
@@ -416,6 +481,11 @@ def save_gmail_connection(
 def get_gmail_connection(
     user_id: str,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when fetching Gmail connection"
+        )
+
     supabase_admin = get_supabase_admin()
 
     response = (
@@ -444,6 +514,11 @@ def delete_gmail_connection(
     the authenticated application user.
     """
 
+    if not user_id:
+        raise ValueError(
+            "user_id is required when deleting Gmail connection"
+        )
+
     supabase_admin = get_supabase_admin()
 
     response = (
@@ -466,6 +541,11 @@ def update_gmail_connection_tokens(
     refresh_token: str | None,
     token_expiry: str | None,
 ):
+    if not user_id:
+        raise ValueError(
+            "user_id is required when updating Gmail tokens"
+        )
+
     update_data = {
         "access_token": access_token,
         "token_expiry": token_expiry,
