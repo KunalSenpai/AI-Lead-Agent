@@ -64,8 +64,6 @@ Generated emails can be reviewed and edited before sending. The approval workflo
 
 Once approved, the email is sent through Gmail and the lead is updated with its sent status and message information.
 
-> Before publishing screenshots, replace personal email addresses and other private information with fictional/demo data.
-
 ## Workflow
 
 ```text
